@@ -1,0 +1,286 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "legendFormat": "Spring request rate"
+        },
+        {
+          "expr": "sum(rate(k6_http_reqs_total[1m]))",
+          "legendFormat": "k6 request rate"
+        }
+      ],
+      "title": "Request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m])) by (le))",
+          "legendFormat": "Spring p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m])) by (le))",
+          "legendFormat": "Spring p99"
+        },
+        {
+          "expr": "k6_http_req_duration_p95 / 1000",
+          "legendFormat": "k6 p95"
+        },
+        {
+          "expr": "k6_http_req_duration_p99 / 1000",
+          "legendFormat": "k6 p99"
+        }
+      ],
+      "title": "P95/P99 latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"2..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "legendFormat": "2xx ratio"
+        },
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"4..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "legendFormat": "4xx ratio"
+        },
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"5..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "legendFormat": "5xx ratio"
+        }
+      ],
+      "title": "HTTP status ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "hikaricp_connections_active{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "active"
+        },
+        {
+          "expr": "hikaricp_connections_pending{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "pending"
+        },
+        {
+          "expr": "hikaricp_connections_max{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "max"
+        }
+      ],
+      "title": "HikariCP active/pending",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(pg_stat_activity_count{job=\"postgres-exporter\"}) by (state)",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "title": "PostgreSQL connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(pg_stat_activity_count{job=\"postgres-exporter\", wait_event_type=\"Lock\"})",
+          "legendFormat": "lock wait sessions"
+        },
+        {
+          "expr": "sum(rate(pg_stat_database_deadlocks{job=\"postgres-exporter\"}[1m]))",
+          "legendFormat": "deadlocks/sec"
+        }
+      ],
+      "title": "PostgreSQL lock wait / deadlock",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "sugang",
+    "baseline",
+    "load-test"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Sugang Baseline Load Test",
+  "uid": "sugang-baseline-load-test",
+  "version": 1,
+  "weekStart": ""
+}

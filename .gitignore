@@ -9,3 +9,6 @@ grafana_data/
 
 # mock harness generated files are intentionally local-only
 mock/
+
+# local load-test output
+output/k6/

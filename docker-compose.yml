@@ -27,13 +27,28 @@ services:
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
 
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: sugang-v2-baseline-postgres-exporter
+    depends_on:
+      - postgres
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: postgresql://user:password@postgres:5432/enrollment?sslmode=disable
+
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: sugang-v2-baseline-prometheus
     depends_on:
       - app
+      - postgres-exporter
     ports:
       - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
@@ -44,5 +59,61 @@ services:
       - prometheus
     ports:
       - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - ./grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  k6:
+    image: grafana/k6:0.54.0
+    container_name: sugang-v2-baseline-k6
+    depends_on:
+      - app
+    profiles:
+      - load
+    environment:
+      BASE_URL: http://app:8080
+      PAYLOAD_PATH: /payload/enrollment_payload.csv
+      VUS: 200
+      ITERATIONS: 80000
+      MAX_DURATION: 45s
+    volumes:
+      - ./k6:/scripts:ro
+      - ./mock/sugang-mock/output/csv:/payload:ro
+      - ./output/k6:/results
+    command:
+      - run
+      - /scripts/baseline-enrollment.js
+      - --summary-export
+      - /results/baseline-summary.json
+
+  k6-prometheus:
+    image: grafana/k6:0.54.0
+    container_name: sugang-v2-baseline-k6-prometheus
+    depends_on:
+      - app
+      - prometheus
+    profiles:
+      - load-prometheus
+    environment:
+      BASE_URL: http://app:8080
+      PAYLOAD_PATH: /payload/enrollment_payload.csv
+      VUS: 200
+      ITERATIONS: 80000
+      MAX_DURATION: 45s
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+    volumes:
+      - ./k6:/scripts:ro
+      - ./mock/sugang-mock/output/csv:/payload:ro
+      - ./output/k6:/results
+    command:
+      - run
+      - -o
+      - experimental-prometheus-rw
+      - /scripts/baseline-enrollment.js
+      - --summary-export
+      - /results/baseline-summary-prometheus.json

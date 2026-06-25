@@ -31,6 +31,11 @@ management:
   metrics:
     tags:
       application: sugang-v2-baseline
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.95, 0.99
 
 server:
   port: ${SERVER_PORT:8080}

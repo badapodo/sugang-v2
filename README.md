@@ -35,6 +35,7 @@ k6
 | `docs/schema-gap-analysis.md` | 기존 엔티티와 Mock CSV 매핑 분석 |
 | `docs/api-spec.md` | Baseline API 요청/응답 명세 |
 | `docs/key-code.md` | 주요 코드 흐름과 책임 정리 |
+| `docs/load-test-environment.md` | k6, Prometheus, Grafana 기반 부하 테스트 환경 |
 
 ## 실행
 
