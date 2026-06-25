@@ -67,7 +67,14 @@ docker compose --profile load run --rm k6
 NORMAL 100건 스모크 테스트:
 
 ```bash
-SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 MAX_DURATION=15s \
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+```
+
+스케줄을 켠 상태의 burst test:
+
+```bash
+SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load run --rm k6
 ```
 

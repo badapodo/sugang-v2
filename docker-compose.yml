@@ -81,6 +81,7 @@ services:
       ITERATIONS: ${ITERATIONS:-}
       LIMIT: ${LIMIT:-}
       SCENARIO_FILTER: ${SCENARIO_FILTER:-}
+      IGNORE_SCHEDULE: ${IGNORE_SCHEDULE:-false}
       MAX_DURATION: ${MAX_DURATION:-45s}
     volumes:
       - ./k6:/scripts:ro
@@ -107,6 +108,7 @@ services:
       ITERATIONS: ${ITERATIONS:-}
       LIMIT: ${LIMIT:-}
       SCENARIO_FILTER: ${SCENARIO_FILTER:-}
+      IGNORE_SCHEDULE: ${IGNORE_SCHEDULE:-false}
       MAX_DURATION: ${MAX_DURATION:-45s}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"

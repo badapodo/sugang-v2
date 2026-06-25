@@ -126,9 +126,20 @@ k6 run k6/baseline-enrollment.js \
 NORMAL 100건 스모크 테스트:
 
 ```bash
-SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 MAX_DURATION=15s \
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
 docker compose --profile load run --rm k6
 ```
+
+스모크 테스트는 API/검증 기준 확인이 목적이므로 `scheduled_offset_ms`를 무시하고 즉시 100건을 실행한다.
+
+Burst test:
+
+```bash
+SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load run --rm k6
+```
+
+Burst test는 `scheduled_offset_ms`를 테스트 시작 기준 절대 오프셋으로 사용한다.
 
 특정 scenario만 실행할 수도 있다.
 
@@ -204,6 +215,7 @@ CSV 컬럼:
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
+| `IGNORE_SCHEDULE` | `true` | `true`이면 `scheduled_offset_ms`를 무시하고 즉시 요청 |
 | `MAX_DURATION` | `15s` | 최대 실행 시간 |
 
 ## 수집 지표

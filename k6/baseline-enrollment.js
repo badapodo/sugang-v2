@@ -12,6 +12,7 @@ const LIMIT = Number(__ENV.LIMIT || 0);
 const REQUESTED_VUS = Number(__ENV.VUS || 200);
 const EFFECTIVE_ITERATIONS = Number(__ENV.ITERATIONS || LIMIT || DEFAULT_ITERATIONS);
 const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
+const IGNORE_SCHEDULE = (__ENV.IGNORE_SCHEDULE || 'false').toLowerCase() === 'true';
 const SAMPLE_LIMIT = 10;
 
 const expectedStatusMismatch = new Counter('baseline_expected_status_mismatch_total');
@@ -48,7 +49,13 @@ const payloads = new SharedArray('enrollment payloads', () => {
     return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
   });
 
-  if (SCENARIO_FILTER) {
+  rows = rows.sort((left, right) => {
+    const leftOffset = Number(left.scheduled_offset_ms || 0);
+    const rightOffset = Number(right.scheduled_offset_ms || 0);
+    return leftOffset - rightOffset;
+  });
+
+  if (SCENARIO_FILTER && SCENARIO_FILTER.toUpperCase() !== 'ALL') {
     const allowed = new Set(
       SCENARIO_FILTER
         .split(',')
@@ -73,11 +80,15 @@ export default function () {
   }
 
   const row = payloads[__ITER % payloads.length];
-  const scheduledOffsetMs = Number(row.scheduled_offset_ms || 0);
-  const waitMs = startedAt + scheduledOffsetMs - Date.now();
 
-  if (waitMs > 0) {
-    sleep(waitMs / 1000);
+  if (!IGNORE_SCHEDULE) {
+    const scheduledOffsetMs = Number(row.scheduled_offset_ms || 0);
+    const targetTime = startedAt + scheduledOffsetMs;
+    const waitMs = targetTime - Date.now();
+
+    if (waitMs > 0) {
+      sleep(waitMs / 1000);
+    }
   }
 
   const response = http.post(
@@ -165,6 +176,7 @@ function textSummary(data) {
     'Baseline enrollment load test summary',
     `- scenario filter: ${SCENARIO_FILTER || 'ALL'}`,
     `- payload limit: ${LIMIT || 'ALL'}`,
+    `- ignore schedule: ${IGNORE_SCHEDULE}`,
     `- effective iterations: ${EFFECTIVE_ITERATIONS}`,
     `- requested VUs: ${REQUESTED_VUS}`,
     `- effective VUs: ${EFFECTIVE_VUS}`,
