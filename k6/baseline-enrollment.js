@@ -13,14 +13,19 @@ const REQUESTED_VUS = Number(__ENV.VUS || 200);
 const EFFECTIVE_ITERATIONS = Number(__ENV.ITERATIONS || LIMIT || DEFAULT_ITERATIONS);
 const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
 const IGNORE_SCHEDULE = (__ENV.IGNORE_SCHEDULE || 'false').toLowerCase() === 'true';
-const SAMPLE_LIMIT = 10;
+const SAMPLE_LIMIT = 20;
 
-const expectedStatusMismatch = new Counter('baseline_expected_status_mismatch_total');
+const SCENARIOS = ['NORMAL', 'PREREQUISITE_FAIL', 'TIME_CONFLICT', 'CAPACITY_OVER', 'DUPLICATE'];
+const STATUS_BUCKETS = ['200', '400', '409', '500'];
+
+const strictExpectedStatusMismatch = new Counter('baseline_strict_expected_status_mismatch_total');
+const criticalMismatch = new Counter('baseline_critical_mismatch_total');
 const scenarioRequests = new Counter('baseline_scenario_requests_total');
-const scenarioStatusCount = new Counter('baseline_scenario_status_count_total');
 const systemFailureRate = new Rate('baseline_system_failure_rate');
 const systemFailureCount = new Counter('baseline_system_failure_total');
+const mismatchSampleMetric = new Counter('baseline_mismatch_sample_total');
 
+const statusCounters = createScenarioStatusCounters();
 const responseSamples = [];
 
 export const options = {
@@ -34,6 +39,7 @@ export const options = {
   },
   thresholds: {
     http_req_duration: ['p(95)<2000', 'p(99)<5000'],
+    baseline_critical_mismatch_total: ['count<1'],
     baseline_system_failure_rate: ['rate<0.005'],
   },
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
@@ -44,9 +50,12 @@ const payloads = new SharedArray('enrollment payloads', () => {
   const [headerLine, ...lines] = raw.split(/\r?\n/);
   const headers = headerLine.split(',');
 
-  let rows = lines.map((line) => {
+  let rows = lines.map((line, index) => {
     const values = line.split(',');
-    return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
+    return {
+      request_id: index + 1,
+      ...Object.fromEntries(headers.map((header, valueIndex) => [header, values[valueIndex]])),
+    };
   });
 
   rows = rows.sort((left, right) => {
@@ -109,38 +118,43 @@ export default function () {
     }
   );
 
+  const actualStatus = response.status || 0;
+  const statusBucket = toStatusBucket(actualStatus);
+  const strictMismatch = isStrictMismatch(row.expected_status, actualStatus);
+  const systemFailure = Boolean(response.error) || actualStatus === 0 || actualStatus >= 500;
+  const critical = isCriticalMismatch(row.expected_status, actualStatus, systemFailure);
+
   scenarioRequests.add(1, { scenario_type: row.scenario_type });
-  scenarioStatusCount.add(1, {
-    scenario_type: row.scenario_type,
-    status: String(response.status),
-  });
-
-  const statusMatched = isExpectedStatus(row.expected_status, response.status);
-  const systemFailure = Boolean(response.error) || response.status === 0 || response.status >= 500;
-
+  addScenarioStatus(row.scenario_type, statusBucket);
   systemFailureRate.add(systemFailure, { scenario_type: row.scenario_type });
 
-  if (!statusMatched) {
-    expectedStatusMismatch.add(1, {
+  if (strictMismatch) {
+    strictExpectedStatusMismatch.add(1, {
       scenario_type: row.scenario_type,
       expected_status: row.expected_status,
-      actual_status: String(response.status),
+      actual_status: String(actualStatus),
     });
-    addResponseSample('EXPECTED_STATUS_MISMATCH', row, response);
+    addMismatchSample(row, response);
+  }
+
+  if (critical) {
+    criticalMismatch.add(1, {
+      scenario_type: row.scenario_type,
+      expected_status: row.expected_status,
+      actual_status: String(actualStatus),
+    });
   }
 
   if (systemFailure) {
     systemFailureCount.add(1, {
       scenario_type: row.scenario_type,
-      status: String(response.status),
+      status: String(actualStatus),
     });
-    addResponseSample('SYSTEM_FAILURE', row, response);
   }
 
   check(response, {
-    'expected status matched': () => statusMatched,
-    'success payload returns exactly 200': () => row.expected_status !== '200' || response.status === 200,
-    'domain failure payload returns 4xx': () => row.expected_status !== '400' || (response.status >= 400 && response.status < 500),
+    'strict expected status matched': () => !strictMismatch,
+    'no critical mismatch': () => !critical,
     'no system failure': () => !systemFailure,
   });
 }
@@ -151,23 +165,89 @@ export function handleSummary(data) {
   };
 }
 
-function isExpectedStatus(expectedStatus, actualStatus) {
+function createScenarioStatusCounters() {
+  const counters = {};
+
+  for (const scenario of SCENARIOS) {
+    counters[scenario] = {};
+    for (const status of STATUS_BUCKETS) {
+      counters[scenario][status] = new Counter(metricNameForStatus(scenario, status));
+    }
+  }
+
+  return counters;
+}
+
+function addScenarioStatus(scenarioType, statusBucket) {
+  if (!statusCounters[scenarioType]) {
+    return;
+  }
+
+  if (!statusCounters[scenarioType][statusBucket]) {
+    return;
+  }
+
+  statusCounters[scenarioType][statusBucket].add(1);
+}
+
+function metricNameForStatus(scenarioType, statusBucket) {
+  return `baseline_status_${normalizeMetricPart(scenarioType)}_${statusBucket}_total`;
+}
+
+function normalizeMetricPart(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function toStatusBucket(actualStatus) {
+  if (actualStatus === 200) {
+    return '200';
+  }
+
+  if (actualStatus === 409) {
+    return '409';
+  }
+
+  if (actualStatus >= 500 || actualStatus === 0) {
+    return '500';
+  }
+
+  if (actualStatus >= 400 && actualStatus < 500) {
+    return '400';
+  }
+
+  return '500';
+}
+
+function isStrictMismatch(expectedStatus, actualStatus) {
   if (expectedStatus === '200') {
-    return actualStatus === 200;
+    return actualStatus !== 200;
   }
 
   if (expectedStatus === '400') {
-    return actualStatus >= 400 && actualStatus < 500;
+    return actualStatus < 400 || actualStatus >= 500;
   }
 
-  return actualStatus === Number(expectedStatus);
+  return actualStatus !== Number(expectedStatus);
+}
+
+function isCriticalMismatch(expectedStatus, actualStatus, systemFailure) {
+  if (systemFailure) {
+    return true;
+  }
+
+  if (expectedStatus === '400' && actualStatus === 200) {
+    return true;
+  }
+
+  return false;
 }
 
 function textSummary(data) {
   const metrics = data.metrics || {};
   const duration = metrics.http_req_duration?.values || {};
   const requests = metrics.http_reqs?.values || {};
-  const mismatch = metrics.baseline_expected_status_mismatch_total?.values || {};
+  const strictMismatch = metrics.baseline_strict_expected_status_mismatch_total?.values || {};
+  const critical = metrics.baseline_critical_mismatch_total?.values || {};
   const systemFailure = metrics.baseline_system_failure_rate?.values || {};
   const systemFailureTotal = metrics.baseline_system_failure_total?.values || {};
 
@@ -182,36 +262,52 @@ function textSummary(data) {
     `- effective VUs: ${EFFECTIVE_VUS}`,
     `- requests: ${requests.count ?? 0}`,
     `- request rate: ${formatNumber(requests.rate)} req/s`,
+    `- strict mismatch count: ${strictMismatch.count ?? 0}`,
+    `- critical mismatch count: ${critical.count ?? 0}`,
     `- system failure rate: ${formatNumber((systemFailure.rate ?? 0) * 100)}%`,
     `- system failure count: ${systemFailureTotal.count ?? 0}`,
     `- latency p95: ${formatNumber(duration['p(95)'])} ms`,
     `- latency p99: ${formatNumber(duration['p(99)'])} ms`,
-    `- expected status mismatches: ${mismatch.count ?? 0}`,
     '',
     'Scenario status count',
     formatScenarioStatusCounts(metrics),
     '',
-    'Response body samples',
-    formatResponseSamples(),
+    'Mismatch samples',
+    formatMismatchSamples(metrics),
     '',
   ].join('\n');
 }
 
-function addResponseSample(type, row, response) {
+function addMismatchSample(row, response) {
   if (responseSamples.length >= SAMPLE_LIMIT) {
     return;
   }
 
-  responseSamples.push({
-    type,
+  const sample = {
+    request_id: row.request_id,
     scenario_type: row.scenario_type,
+    expected_status: row.expected_status,
+    actual_status: response.status || 0,
     student_id: row.student_id,
     course_id: row.course_id,
-    expected_status: row.expected_status,
-    actual_status: response.status,
-    error: response.error || '',
-    body: sanitizeBody(response.body),
+    response_body: sanitizeBody(response.body),
+  };
+
+  responseSamples.push(sample);
+  mismatchSampleMetric.add(1, {
+    request_id: String(sample.request_id),
+    scenario_type: sample.scenario_type,
+    expected_status: sample.expected_status,
+    actual_status: String(sample.actual_status),
+    student_id: String(sample.student_id),
+    course_id: String(sample.course_id),
+    response_body: encodeURIComponent(sample.response_body.slice(0, 200)),
   });
+
+  // k6 does not reliably aggregate arbitrary mutable JS arrays from multiple VUs
+  // into handleSummary. Logging the same compact sample guarantees visibility
+  // during smoke tests and preserves the summary path when VU-local data is available.
+  console.error(`MISMATCH_SAMPLE ${JSON.stringify(sample)}`);
 }
 
 function sanitizeBody(body) {
@@ -224,46 +320,93 @@ function sanitizeBody(body) {
 }
 
 function formatScenarioStatusCounts(metrics) {
-  const rows = Object.entries(metrics)
-    .filter(([name]) => name.startsWith('baseline_scenario_status_count_total{'))
-    .map(([name, metric]) => ({
-      scenario: extractTag(name, 'scenario_type') || 'unknown',
-      status: extractTag(name, 'status') || 'unknown',
-      count: metric.values?.count ?? 0,
-    }))
-    .sort((a, b) => a.scenario.localeCompare(b.scenario) || a.status.localeCompare(b.status));
+  return SCENARIOS
+    .map((scenario) => {
+      const counts = STATUS_BUCKETS
+        .map((status) => `${status}=${metricCount(metrics, metricNameForStatus(scenario, status))}`)
+        .join(', ');
 
-  if (rows.length === 0) {
-    return '- no scenario status count metrics collected';
+      return `- ${scenario}: ${counts}`;
+    })
+    .join('\n');
+}
+
+function metricCount(metrics, metricName) {
+  return metrics[metricName]?.values?.count ?? 0;
+}
+
+function formatMismatchSamples(metrics) {
+  if (responseSamples.length > 0) {
+    return responseSamples
+      .slice(0, SAMPLE_LIMIT)
+      .map((sample, index) => formatSample(sample, index))
+      .join('\n');
   }
 
-  return rows.map((row) => `- ${row.scenario} / HTTP ${row.status}: ${row.count}`).join('\n');
+  const metricSamples = formatMismatchSamplesFromMetrics(metrics);
+  if (metricSamples) {
+    return metricSamples;
+  }
+
+  return '- no strict mismatch samples collected in summary. Check MISMATCH_SAMPLE lines in k6 output if running with multiple VUs.';
+}
+
+function formatSample(sample, index) {
+  return [
+    `Sample ${index + 1}`,
+    `  request_id: ${sample.request_id}`,
+    `  scenario_type: ${sample.scenario_type}`,
+    `  expected_status: ${sample.expected_status}`,
+    `  actual_status: ${sample.actual_status}`,
+    `  student_id: ${sample.student_id}`,
+    `  course_id: ${sample.course_id}`,
+    `  response_body: ${sample.response_body || '-'}`,
+  ].join('\n');
+}
+
+function formatMismatchSamplesFromMetrics(metrics) {
+  const samples = Object.entries(metrics)
+    .filter(([name]) => name.startsWith('baseline_mismatch_sample_total{'))
+    .slice(0, SAMPLE_LIMIT)
+    .map(([name]) => ({
+      request_id: extractTag(name, 'request_id'),
+      scenario_type: extractTag(name, 'scenario_type'),
+      expected_status: extractTag(name, 'expected_status'),
+      actual_status: extractTag(name, 'actual_status'),
+      student_id: extractTag(name, 'student_id'),
+      course_id: extractTag(name, 'course_id'),
+      response_body: decodeTag(extractTag(name, 'response_body')),
+    }));
+
+  if (samples.length === 0) {
+    return '';
+  }
+
+  return samples
+    .map((sample, index) => formatSample(sample, index))
+    .join('\n');
 }
 
 function extractTag(metricName, tagName) {
-  const match = metricName.match(new RegExp(`${tagName}:([^,}]+)`));
-  return match ? match[1] : '';
-}
-
-function formatResponseSamples() {
-  if (responseSamples.length === 0) {
-    return '- no mismatch or system failure samples';
+  const colonStyle = metricName.match(new RegExp(`${tagName}:([^,}]+)`));
+  if (colonStyle) {
+    return colonStyle[1];
   }
 
-  return responseSamples
-    .slice(0, SAMPLE_LIMIT)
-    .map((sample, index) => [
-      `Sample ${index + 1}`,
-      `  type: ${sample.type}`,
-      `  scenario_type: ${sample.scenario_type}`,
-      `  student_id: ${sample.student_id}`,
-      `  course_id: ${sample.course_id}`,
-      `  expected_status: ${sample.expected_status}`,
-      `  actual_status: ${sample.actual_status}`,
-      `  error: ${sample.error || '-'}`,
-      `  body: ${sample.body || '-'}`,
-    ].join('\n'))
-    .join('\n');
+  const equalsStyle = metricName.match(new RegExp(`${tagName}="([^"]*)"`));
+  return equalsStyle ? equalsStyle[1] : '';
+}
+
+function decodeTag(value) {
+  if (!value) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return value;
+  }
 }
 
 function formatNumber(value) {

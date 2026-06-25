@@ -205,8 +205,30 @@ CSV 컬럼:
 | custom metric | 의미 | threshold |
 | --- | --- | --- |
 | `baseline_system_failure_rate` | 5xx 또는 네트워크 실패 비율 | `rate < 0.005` |
-| `baseline_expected_status_mismatch_total` | expected_status와 실제 응답 분류 불일치 수 | summary에서 원인 확인 |
-| `baseline_scenario_status_count_total` | scenario_type별 HTTP status count | summary에서 분포 확인 |
+| `baseline_critical_mismatch_total` | expected 400이 200으로 성공했거나 5xx/네트워크 실패 발생 | `count < 1` |
+| `baseline_strict_expected_status_mismatch_total` | expected_status와 실제 응답 분류 불일치 수 | summary에서 원인 확인 |
+| `baseline_status_<scenario>_<status>_total` | scenario_type별 HTTP status count | summary에서 분포 확인 |
+
+Mismatch 분류:
+
+| 분류 | 조건 | threshold 여부 |
+| --- | --- | --- |
+| strict mismatch | `expected_status=200`인데 200이 아니거나, `expected_status=400`인데 4xx가 아닌 경우 | 관측만 수행 |
+| critical mismatch | `expected_status=400` 요청이 200으로 성공하거나, 5xx/네트워크 실패가 발생한 경우 | 실패 조건 |
+
+Strict mismatch가 발생하면 summary에 최대 20개 sample을 출력한다.
+
+Sample 필드:
+
+```text
+request_id
+scenario_type
+expected_status
+actual_status
+student_id
+course_id
+response_body
+```
 
 필터링 환경변수:
 
@@ -248,9 +270,10 @@ CSV 컬럼:
 | `http_req_duration` | end-to-end latency |
 | `baseline_system_failure_rate` | 5xx 또는 네트워크 실패 비율 |
 | `baseline_system_failure_total` | 5xx 또는 네트워크 실패 수 |
-| `baseline_expected_status_mismatch_total` | expected_status와 실제 status 불일치 수 |
+| `baseline_strict_expected_status_mismatch_total` | expected_status와 실제 status 불일치 수 |
+| `baseline_critical_mismatch_total` | 반드시 0이어야 하는 critical mismatch 수 |
 | `baseline_scenario_requests_total` | scenario_type별 요청 수 |
-| `baseline_scenario_status_count_total` | scenario_type + HTTP status별 응답 수 |
+| `baseline_status_<scenario>_<status>_total` | scenario_type + HTTP status별 응답 수 |
 
 ## Grafana Dashboard
 
