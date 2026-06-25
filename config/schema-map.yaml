@@ -1,0 +1,458 @@
+version: 1
+
+# JPA 엔티티와 PostgreSQL COPY용 CSV 사이의 계약.
+# tables의 key와 모든 column name은 실제 JPA 매핑에서 해석되는 DB 이름이다.
+# 각 columns 배열의 순서가 해당 CSV의 헤더 및 PostgreSQL COPY 컬럼 순서다.
+database:
+  vendor: postgresql
+  naming: spring_boot_default_snake_case
+
+copy:
+  format: csv
+  header: true
+  null_value: "\\N"
+  # 부모 및 논리 참조 대상을 먼저 적재한다.
+  load_order:
+    - department
+    - member
+    - course
+    - student
+    - course_time
+    - prerequisite
+    - completed_course
+    - enrollment
+  cleanup_order:
+    - enrollment
+    - completed_course
+    - prerequisite
+    - course_time
+    - student
+    - course
+    - member
+    - department
+
+# value_source 의미:
+# - harness: CSV 생성기가 반드시 직접 생성
+# - harness_identity: JPA insert에서는 DB identity지만, COPY에서는 참조 가능한 고정 ID를 Harness가 생성
+# - harness_derived: 다른 Mock Data로부터 계산하여 생성
+# - harness_constant: Harness가 지정된 상수로 생성
+# - harness_or_null: Harness가 직접 생성하거나 COPY NULL 표기(\N)를 사용
+tables:
+  department:
+    entity: Department
+    csv: department.csv
+    primary_key:
+      - id
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: name
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  member:
+    entity: Member
+    csv: member.csv
+    primary_key:
+      - member_id
+    unique_constraints:
+      - columns: [email]
+    columns:
+      - name: member_id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: email
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+      - name: password
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+        format: bcrypt
+      - name: name
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+      - name: role
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+        allowed_values: [ROLE_USER, ROLE_ADMIN]
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  course:
+    entity: Course
+    csv: course.csv
+    primary_key:
+      - id
+    version_column: version
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: title
+        type: varchar(255)
+        nullable: false
+        value_source: harness
+      - name: capacity
+        type: integer
+        nullable: false
+        value_source: harness
+      - name: current_count
+        type: integer
+        nullable: false
+        value_source: harness_derived
+        derived_from: enrollment_count_for_course
+      - name: version
+        type: bigint
+        nullable: true
+        value_source: harness_constant
+        value: 0
+        jpa_generation: optimistic_lock
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  student:
+    entity: Student
+    csv: student.csv
+    primary_key:
+      - student_id
+    columns:
+      - name: student_id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: department_id
+        type: bigint
+        nullable: true
+        domain_required: true
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: department
+          column: id
+      - name: member_id
+        type: bigint
+        nullable: true
+        domain_required: true
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: member
+          column: member_id
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  course_time:
+    entity: CourseTime
+    csv: course_time.csv
+    primary_key:
+      - id
+    indexes:
+      - name: idx_course_time_course_id
+        columns: [course_id]
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: course_id
+        type: bigint
+        nullable: false
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: course
+          column: id
+      - name: day_of_week
+        type: varchar(10)
+        nullable: false
+        value_source: harness
+        allowed_values: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
+      - name: start_time
+        type: time
+        nullable: false
+        value_source: harness
+      - name: end_time
+        type: time
+        nullable: false
+        value_source: harness
+      - name: location
+        type: varchar(50)
+        nullable: true
+        value_source: harness_or_null
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  prerequisite:
+    entity: Prerequisite
+    csv: prerequisite.csv
+    primary_key:
+      - id
+    indexes:
+      - name: idx_prerequisite_covering
+        columns: [course_id, department_id, pre_course_id]
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: course_id
+        type: bigint
+        nullable: true
+        domain_required: true
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: course
+          column: id
+      - name: pre_course_id
+        type: bigint
+        nullable: true
+        domain_required: true
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: course
+          column: id
+      - name: department_id
+        type: bigint
+        nullable: true
+        domain_required: true
+        value_source: harness
+        foreign_key:
+          kind: physical
+          table: department
+          column: id
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  completed_course:
+    entity: CompletedCourse
+    csv: completed_course.csv
+    primary_key:
+      - id
+    unique_constraints:
+      - name: uk_student_completed_course
+        columns: [student_id, course_id]
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: student_id
+        type: bigint
+        nullable: false
+        value_source: harness
+        foreign_key:
+          kind: logical
+          table: student
+          column: student_id
+      - name: course_id
+        type: bigint
+        nullable: false
+        value_source: harness
+        foreign_key:
+          kind: logical
+          table: course
+          column: id
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+  enrollment:
+    entity: Enrollment
+    csv: enrollment.csv
+    primary_key:
+      - id
+    unique_constraints:
+      - name: uk_student_course
+        columns: [student_id, course_id]
+    columns:
+      - name: id
+        type: bigint
+        nullable: false
+        value_source: harness_identity
+        jpa_generation: identity
+      - name: student_id
+        type: bigint
+        nullable: false
+        value_source: harness
+        foreign_key:
+          kind: logical
+          table: student
+          column: student_id
+      - name: course_id
+        type: bigint
+        nullable: false
+        value_source: harness
+        foreign_key:
+          kind: logical
+          table: course
+          column: id
+      - name: created_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: created_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_by
+        type: varchar(255)
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+      - name: last_modified_date
+        type: timestamp
+        nullable: true
+        value_source: harness_or_null
+        jpa_generation: auditing_if_enabled
+
+# PK를 명시적으로 COPY한 뒤 Harness/loader가 각 identity sequence를 MAX(PK)보다
+# 큰 값으로 동기화해야 이후 JPA insert와 충돌하지 않는다.
+post_load:
+  synchronize_identity_sequences: true

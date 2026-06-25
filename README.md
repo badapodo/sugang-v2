@@ -1,0 +1,119 @@
+# sugang-v2
+
+동기식 RDB 락 기반 수강신청 API Baseline 프로젝트.
+
+이 프로젝트는 `tmp/sugang`의 기존 구현에서 Baseline에 필요한 JPA 엔티티/Repository만 가져와 별도 프로젝트로 정리한 버전이다. Redis, MQ, 비동기 큐, JWT 인증은 의도적으로 제외했다.
+
+## 목표
+
+Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을 측정한다.
+
+- Hotspot 과목에서 PostgreSQL row lock 경합이 어떻게 발생하는가
+- 동기식 WAS-RDB 구조의 P95/P99와 TPS 한계는 어디인가
+- 정원 초과, 중복 신청, 선수과목, 시간표 충돌이 DB 트랜잭션 안에서 방어되는가
+
+## 구성
+
+```text
+k6
+→ Spring Boot /api/baseline/enrollments
+→ JPA @Transactional
+→ PostgreSQL SELECT ... FOR UPDATE
+```
+
+## 주요 파일
+
+| 파일 | 설명 |
+| --- | --- |
+| `src/main/java/badapodo/sugang/service/BaselineEnrollmentService.java` | 동기식 RDB Baseline 수강신청 로직 |
+| `src/main/java/badapodo/sugang/controller/BaselineEnrollmentController.java` | 인증 없는 Baseline API |
+| `infra/postgres/schema.sql` | 테이블, FK, unique constraint, index 생성 |
+| `infra/postgres/load.sql` | Mock CSV COPY 적재 |
+| `infra/postgres/reset.sql` | 반복 테스트용 enrollment/current_count 초기화 |
+| `k6/baseline-enrollment.js` | `enrollment_payload.csv` 기반 부하 테스트 |
+| `docs/baseline-architecture.md` | Baseline 목적/구조/측정 지표 |
+| `docs/schema-gap-analysis.md` | 기존 엔티티와 Mock CSV 매핑 분석 |
+| `docs/api-spec.md` | Baseline API 요청/응답 명세 |
+| `docs/key-code.md` | 주요 코드 흐름과 책임 정리 |
+
+## 실행
+
+PostgreSQL 실행:
+
+```bash
+docker compose up -d postgres
+```
+
+스키마 생성 및 Mock Data 적재:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/schema.sql
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/load.sql
+```
+
+애플리케이션 실행:
+
+```bash
+./gradlew bootRun
+```
+
+k6 실행:
+
+```bash
+k6 run k6/baseline-enrollment.js
+```
+
+반복 테스트 초기화:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/reset.sql
+```
+
+## API
+
+```http
+POST /api/baseline/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+성공:
+
+```json
+{
+  "status": "SUCCESS"
+}
+```
+
+실패:
+
+```json
+{
+  "status": "FAIL",
+  "reason": "DuplicateEnrollmentException",
+  "message": "현재 학기에 이미 신청한 과목입니다."
+}
+```
+
+## Observability
+
+Actuator/Prometheus endpoint:
+
+```text
+http://localhost:8080/actuator/prometheus
+```
+
+Docker Compose 전체 실행 시:
+
+```bash
+./gradlew bootJar
+docker compose up --build
+```
+
+- App: http://localhost:8080
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000

@@ -1,0 +1,46 @@
+services:
+  app:
+    build: .
+    container_name: sugang-v2-baseline-app
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/enrollment
+      SPRING_DATASOURCE_USERNAME: user
+      SPRING_DATASOURCE_PASSWORD: password
+      HIKARI_MAXIMUM_POOL_SIZE: 30
+      HIKARI_CONNECTION_TIMEOUT_MS: 8000
+
+  postgres:
+    image: postgres:16
+    container_name: sugang-v2-baseline-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: enrollment
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: sugang-v2-baseline-prometheus
+    depends_on:
+      - app
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    container_name: sugang-v2-baseline-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana_data:/var/lib/grafana
