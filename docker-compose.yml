@@ -86,9 +86,9 @@ services:
       - ./output/k6:/results
     command:
       - run
-      - /scripts/baseline-enrollment.js
       - --summary-export
       - /results/baseline-summary.json
+      - /scripts/baseline-enrollment.js
 
   k6-prometheus:
     image: grafana/k6:0.54.0
@@ -114,6 +114,6 @@ services:
       - run
       - -o
       - experimental-prometheus-rw
-      - /scripts/baseline-enrollment.js
       - --summary-export
       - /results/baseline-summary-prometheus.json
+      - /scripts/baseline-enrollment.js

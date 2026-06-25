@@ -60,10 +60,31 @@ Mock data는 `.gitignore` 대상이므로 로컬에서 생성하거나 별도로
 ./gradlew bootJar
 ```
 
-### 2. 관측 스택 실행
+### 2. PostgreSQL 실행
 
 ```bash
-docker compose up --build -d app postgres postgres-exporter prometheus grafana
+docker compose up -d postgres
+```
+
+`spring.jpa.hibernate.ddl-auto=validate` 설정 때문에 schema 생성 전에 app을 먼저 실행하면 애플리케이션이 시작되지 않을 수 있다.
+
+### 3. DB schema 생성 및 Mock Data 적재
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/schema.sql
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/load.sql
+```
+
+반복 테스트 전 초기화:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/reset.sql
+```
+
+### 4. App / Observability 스택 실행
+
+```bash
+docker compose up --build -d app postgres-exporter prometheus grafana
 ```
 
 접속 URL:
@@ -83,20 +104,7 @@ Grafana 기본 계정:
 admin / admin
 ```
 
-### 3. DB schema 생성 및 Mock Data 적재
-
-```bash
-PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/schema.sql
-PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/load.sql
-```
-
-반복 테스트 전 초기화:
-
-```bash
-PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/reset.sql
-```
-
-### 4. summary JSON 기반 k6 실행
+### 5. summary JSON 기반 k6 실행
 
 ```bash
 docker compose --profile load run --rm k6
@@ -115,7 +123,7 @@ k6 run k6/baseline-enrollment.js \
   --summary-export output/k6/baseline-summary.json
 ```
 
-### 5. Prometheus remote-write 기반 k6 실행
+### 6. Prometheus remote-write 기반 k6 실행
 
 Prometheus에 k6 지표를 직접 밀어 넣고 Grafana에서 함께 보고 싶을 때 사용한다.
 

@@ -55,13 +55,13 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/lo
 애플리케이션 실행:
 
 ```bash
-./gradlew bootRun
+docker compose up --build -d app postgres-exporter prometheus grafana
 ```
 
 k6 실행:
 
 ```bash
-k6 run k6/baseline-enrollment.js
+docker compose --profile load run --rm k6
 ```
 
 반복 테스트 초기화:
