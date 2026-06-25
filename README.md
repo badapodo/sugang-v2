@@ -117,3 +117,13 @@ docker compose up --build
 - App: http://localhost:8080
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
+
+## Baseline Resource Profile
+
+Docker Compose 기준 app 컨테이너 리소스와 DB connection pool은 다음 값으로 고정한다.
+
+| 항목 | 값 |
+| --- | --- |
+| CPU | 8 vCPU |
+| RAM | 32GB |
+| HikariCP maximum pool size | 16 |
