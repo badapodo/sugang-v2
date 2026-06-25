@@ -77,9 +77,11 @@ services:
     environment:
       BASE_URL: http://app:8080
       PAYLOAD_PATH: /payload/enrollment_payload.csv
-      VUS: 200
-      ITERATIONS: 80000
-      MAX_DURATION: 45s
+      VUS: ${VUS:-200}
+      ITERATIONS: ${ITERATIONS:-}
+      LIMIT: ${LIMIT:-}
+      SCENARIO_FILTER: ${SCENARIO_FILTER:-}
+      MAX_DURATION: ${MAX_DURATION:-45s}
     volumes:
       - ./k6:/scripts:ro
       - ./mock/sugang-mock/output/csv:/payload:ro
@@ -101,9 +103,11 @@ services:
     environment:
       BASE_URL: http://app:8080
       PAYLOAD_PATH: /payload/enrollment_payload.csv
-      VUS: 200
-      ITERATIONS: 80000
-      MAX_DURATION: 45s
+      VUS: ${VUS:-200}
+      ITERATIONS: ${ITERATIONS:-}
+      LIMIT: ${LIMIT:-}
+      SCENARIO_FILTER: ${SCENARIO_FILTER:-}
+      MAX_DURATION: ${MAX_DURATION:-45s}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
     volumes:

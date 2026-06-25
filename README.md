@@ -64,6 +64,13 @@ k6 실행:
 docker compose --profile load run --rm k6
 ```
 
+NORMAL 100건 스모크 테스트:
+
+```bash
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 MAX_DURATION=15s \
+docker compose --profile load run --rm k6
+```
+
 반복 테스트 초기화:
 
 ```bash

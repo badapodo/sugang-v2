@@ -123,6 +123,23 @@ k6 run k6/baseline-enrollment.js \
   --summary-export output/k6/baseline-summary.json
 ```
 
+NORMAL 100건 스모크 테스트:
+
+```bash
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 MAX_DURATION=15s \
+docker compose --profile load run --rm k6
+```
+
+특정 scenario만 실행할 수도 있다.
+
+```bash
+SCENARIO_FILTER=PREREQUISITE_FAIL LIMIT=100 VUS=1 \
+docker compose --profile load run --rm k6
+
+SCENARIO_FILTER=TIME_CONFLICT LIMIT=100 VUS=1 \
+docker compose --profile load run --rm k6
+```
+
 ### 6. Prometheus remote-write 기반 k6 실행
 
 Prometheus에 k6 지표를 직접 밀어 넣고 Grafana에서 함께 보고 싶을 때 사용한다.
@@ -165,10 +182,29 @@ CSV 컬럼:
 
 | expected_status | 기대 결과 |
 | --- | --- |
-| `200` | HTTP 200 |
-| `400` | HTTP 4xx |
+| `200` | 정확히 HTTP 200 |
+| `400` | HTTP 4xx 전체를 도메인 실패 정상 응답으로 인정 |
 
 도메인 실패 payload는 4xx로 방어되면 성공으로 본다. 5xx는 Baseline API 또는 DB 병목이 사용자 오류를 넘어 서버 실패로 전이된 신호다.
+
+`http_req_failed`는 threshold로 사용하지 않는다. k6의 기본 실패 판정은 4xx 도메인 실패까지 실패로 잡을 수 있기 때문이다.
+
+대신 다음 custom metric을 SLO 기준으로 사용한다.
+
+| custom metric | 의미 | threshold |
+| --- | --- | --- |
+| `baseline_system_failure_rate` | 5xx 또는 네트워크 실패 비율 | `rate < 0.005` |
+| `baseline_expected_status_mismatch_total` | expected_status와 실제 응답 분류 불일치 수 | summary에서 원인 확인 |
+| `baseline_scenario_status_count_total` | scenario_type별 HTTP status count | summary에서 분포 확인 |
+
+필터링 환경변수:
+
+| 환경변수 | 예시 | 설명 |
+| --- | --- | --- |
+| `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
+| `LIMIT` | `100` | payload 상위 N건만 실행 |
+| `VUS` | `1` | k6 VU 수 |
+| `MAX_DURATION` | `15s` | 최대 실행 시간 |
 
 ## 수집 지표
 
@@ -198,9 +234,11 @@ CSV 컬럼:
 | --- | --- |
 | `http_reqs` | 요청 수/TPS |
 | `http_req_duration` | end-to-end latency |
-| `http_req_failed` | k6 check 기준 실패율 |
+| `baseline_system_failure_rate` | 5xx 또는 네트워크 실패 비율 |
+| `baseline_system_failure_total` | 5xx 또는 네트워크 실패 수 |
 | `baseline_expected_status_mismatch_total` | expected_status와 실제 status 불일치 수 |
 | `baseline_scenario_requests_total` | scenario_type별 요청 수 |
+| `baseline_scenario_status_count_total` | scenario_type + HTTP status별 응답 수 |
 
 ## Grafana Dashboard
 
