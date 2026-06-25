@@ -203,7 +203,7 @@ CSV 컬럼:
 | --- | --- | --- |
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
-| `VUS` | `1` | k6 VU 수 |
+| `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
 | `MAX_DURATION` | `15s` | 최대 실행 시간 |
 
 ## 수집 지표

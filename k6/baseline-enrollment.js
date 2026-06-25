@@ -9,6 +9,9 @@ const MAX_DURATION = __ENV.MAX_DURATION || '45s';
 const DEFAULT_ITERATIONS = 80000;
 const SCENARIO_FILTER = (__ENV.SCENARIO_FILTER || '').trim();
 const LIMIT = Number(__ENV.LIMIT || 0);
+const REQUESTED_VUS = Number(__ENV.VUS || 200);
+const EFFECTIVE_ITERATIONS = Number(__ENV.ITERATIONS || LIMIT || DEFAULT_ITERATIONS);
+const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
 const SAMPLE_LIMIT = 10;
 
 const expectedStatusMismatch = new Counter('baseline_expected_status_mismatch_total');
@@ -23,8 +26,8 @@ export const options = {
   scenarios: {
     baseline_enrollment: {
       executor: 'shared-iterations',
-      vus: Number(__ENV.VUS || 200),
-      iterations: Number(__ENV.ITERATIONS || LIMIT || DEFAULT_ITERATIONS),
+      vus: EFFECTIVE_VUS,
+      iterations: EFFECTIVE_ITERATIONS,
       maxDuration: MAX_DURATION,
     },
   },
@@ -162,6 +165,9 @@ function textSummary(data) {
     'Baseline enrollment load test summary',
     `- scenario filter: ${SCENARIO_FILTER || 'ALL'}`,
     `- payload limit: ${LIMIT || 'ALL'}`,
+    `- effective iterations: ${EFFECTIVE_ITERATIONS}`,
+    `- requested VUs: ${REQUESTED_VUS}`,
+    `- effective VUs: ${EFFECTIVE_VUS}`,
     `- requests: ${requests.count ?? 0}`,
     `- request rate: ${formatNumber(requests.rate)} req/s`,
     `- system failure rate: ${formatNumber((systemFailure.rate ?? 0) * 100)}%`,
