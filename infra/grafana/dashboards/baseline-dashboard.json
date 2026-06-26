@@ -52,7 +52,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m]))",
           "legendFormat": "Spring request rate"
         },
         {
@@ -93,11 +93,11 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m])) by (le))",
           "legendFormat": "Spring p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m])) by (le))",
           "legendFormat": "Spring p99"
         },
         {
@@ -142,15 +142,15 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"2..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\", status=~\"2..\"}[1m])) or vector(0)) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m])))",
           "legendFormat": "2xx ratio"
         },
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"4..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\", status=~\"4..\"}[1m])) or vector(0)) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m])))",
           "legendFormat": "4xx ratio"
         },
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\", status=~\"5..\"}[1m])) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=\"/api/baseline/enrollments\"}[1m]))",
+          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\", status=~\"5..\"}[1m])) or vector(0)) / sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/(baseline|optimistic)/enrollments\"}[1m])))",
           "legendFormat": "5xx ratio"
         }
       ],

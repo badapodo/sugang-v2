@@ -528,9 +528,9 @@ compose command:
 
 | 패널 | 주요 PromQL |
 | --- | --- |
-| `Request rate` | `sum(rate(http_server_requests_seconds_count{job="sugang-v2-baseline", uri="/api/baseline/enrollments"}[1m]))`, `sum(rate(k6_http_reqs_total[1m]))` |
-| `P95/P99 latency` | `histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job="sugang-v2-baseline", uri="/api/baseline/enrollments"}[1m])) by (le))`, `histogram_quantile(0.99, ...)`, `k6_http_req_duration_p95 / 1000`, `k6_http_req_duration_p99 / 1000` |
-| `HTTP status ratio` | 2xx/4xx/5xx별 `http_server_requests_seconds_count` 비율 |
+| `Request rate` | `sum(rate(http_server_requests_seconds_count{job="sugang-v2-baseline", uri=~"/api/(baseline\|optimistic)/enrollments"}[1m]))`, `sum(rate(k6_http_reqs_total[1m]))` |
+| `P95/P99 latency` | `histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job="sugang-v2-baseline", uri=~"/api/(baseline\|optimistic)/enrollments"}[1m])) by (le))`, `histogram_quantile(0.99, ...)`, `k6_http_req_duration_p95 / 1000`, `k6_http_req_duration_p99 / 1000` |
+| `HTTP status ratio` | baseline/optimistic enrollment endpoint의 2xx/4xx/5xx별 `http_server_requests_seconds_count` 비율 |
 | `HikariCP active/pending` | `hikaricp_connections_active`, `hikaricp_connections_pending`, `hikaricp_connections_max` |
 | `PostgreSQL connections` | `sum(pg_stat_activity_count{job="postgres-exporter"}) by (state)` |
 | `PostgreSQL lock wait / deadlock` | `sum(pg_stat_activity_wait_count{job="postgres-exporter", datname="enrollment", wait_event_type="Lock"}) or vector(0)`, `sum(rate(pg_stat_database_deadlocks{job="postgres-exporter"}[1m]))` |

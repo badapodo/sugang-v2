@@ -136,7 +136,22 @@ SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
-피크 타임 Capacity Planning 테스트:
+피크 타임 Capacity Planning 테스트(baseline):
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=optimistic \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+피크 타임 Capacity Planning 테스트(optimistic):
 
 ```bash
 PGPASSWORD=password psql -h localhost -U user -d enrollment \
