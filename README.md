@@ -16,7 +16,7 @@ Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을
 
 ```text
 k6
-→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments
+→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments, /api/single-writer-sync/enrollments
 → JPA @Transactional
 → PostgreSQL PESSIMISTIC_WRITE 또는 OPTIMISTIC lock
 ```
@@ -31,6 +31,7 @@ k6
 | `src/main/java/badapodo/sugang/controller/BaselineEnrollmentController.java` | 인증 없는 Baseline API |
 | `src/main/java/badapodo/sugang/controller/OptimisticEnrollmentController.java` | 인증 없는 Optimistic Lock 실험 API |
 | `src/main/java/badapodo/sugang/controller/SingleWriterEnrollmentController.java` | 인증 없는 Single Writer Queue 실험 API |
+| `src/main/java/badapodo/sugang/controller/SingleWriterSyncEnrollmentController.java` | worker 처리 결과를 기다리는 동기 응답형 Single Writer API |
 | `infra/postgres/schema.sql` | 테이블, FK, unique constraint, index 생성 |
 | `infra/postgres/load.sql` | Mock CSV COPY 적재 |
 | `infra/postgres/reset.sql` | 반복 테스트용 enrollment/current_count 초기화 |
@@ -111,6 +112,16 @@ API_MODE=single-writer SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=tr
 docker compose --profile load run --rm k6
 ```
 
+Single Writer Sync endpoint 스모크 테스트:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer-sync SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+```
+
 같은 payload/조건으로 Baseline과 Optimistic 비교:
 
 ```bash
@@ -146,6 +157,12 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
   -f infra/postgres/reset.sql
 
 API_MODE=single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer-sync SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
@@ -207,6 +224,21 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
 
 EXECUTOR_MODE=peak-arrival-rate \
 API_MODE=single-writer \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+피크 타임 Capacity Planning 테스트(single-writer-sync):
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=single-writer-sync \
 SCENARIO_FILTER=ALL \
 PEAK_RATE=4800 PEAK_DURATION=10s \
 TAIL_RATE=1600 TAIL_DURATION=20s \
@@ -304,12 +336,33 @@ Queue capacity 초과:
 }
 ```
 
+Single Writer Sync 실험:
+
+```http
+POST /api/single-writer-sync/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+동작 방식:
+
+- 요청을 `courseId` 기반 partition queue에 넣는다.
+- API thread는 worker가 DB 검증/저장을 끝낼 때까지 대기한다.
+- worker 결과에 따라 baseline과 같은 의미의 `200`, `400`, `409`, `500` 응답을 반환한다.
+- `SINGLE_WRITER_RESPONSE_TIMEOUT_MS`를 넘기면 `504 Gateway Timeout`을 반환한다.
+- queue capacity 초과는 `429 Too Many Requests`를 반환한다.
+
 Single Writer 설정값:
 
 | 환경변수 | 기본값 | 설명 |
 | --- | ---: | --- |
 | `SINGLE_WRITER_PARTITION_COUNT` | `8` | courseId hash 기반 partition 수 |
 | `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | partition별 queue capacity |
+| `SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | single-writer-sync API thread가 worker 결과를 기다리는 최대 시간 |
 
 성공:
 

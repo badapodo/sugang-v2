@@ -13,8 +13,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
@@ -39,21 +42,25 @@ public class SingleWriterEnrollmentQueueService {
     private final MeterRegistry meterRegistry;
     private final int partitionCount;
     private final int queueCapacityPerPartition;
+    private final long responseTimeoutMs;
     private final List<BlockingQueue<SingleWriterEnrollmentCommand>> queues;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Counter enqueuedCounter;
     private final Counter rejectedCounter;
     private final Counter processedCounter;
     private final Counter failedCounter;
+    private final Counter syncTimeoutCounter;
     private final Timer processingLatencyTimer;
     private final Timer endToEndLatencyTimer;
+    private final Timer syncResponseWaitLatencyTimer;
     private ExecutorService executorService;
 
     public SingleWriterEnrollmentQueueService(
             SingleWriterEnrollmentProcessor processor,
             MeterRegistry meterRegistry,
             @Value("${SINGLE_WRITER_PARTITION_COUNT:8}") int partitionCount,
-            @Value("${SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION:10000}") int queueCapacityPerPartition
+            @Value("${SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION:10000}") int queueCapacityPerPartition,
+            @Value("${SINGLE_WRITER_RESPONSE_TIMEOUT_MS:5000}") long responseTimeoutMs
     ) {
         if (partitionCount <= 0) {
             throw new IllegalArgumentException("SINGLE_WRITER_PARTITION_COUNT must be greater than 0");
@@ -61,18 +68,25 @@ public class SingleWriterEnrollmentQueueService {
         if (queueCapacityPerPartition <= 0) {
             throw new IllegalArgumentException("SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION must be greater than 0");
         }
+        if (responseTimeoutMs <= 0) {
+            throw new IllegalArgumentException("SINGLE_WRITER_RESPONSE_TIMEOUT_MS must be greater than 0");
+        }
 
         this.processor = processor;
         this.meterRegistry = meterRegistry;
         this.partitionCount = partitionCount;
         this.queueCapacityPerPartition = queueCapacityPerPartition;
+        this.responseTimeoutMs = responseTimeoutMs;
         this.queues = createQueues(partitionCount, queueCapacityPerPartition);
         this.enqueuedCounter = Counter.builder("single_writer.enqueued.count").register(meterRegistry);
         this.rejectedCounter = Counter.builder("single_writer.rejected.count").register(meterRegistry);
         this.processedCounter = Counter.builder("single_writer.processed.count").register(meterRegistry);
         this.failedCounter = Counter.builder("single_writer.failed.count").register(meterRegistry);
+        this.syncTimeoutCounter = Counter.builder("single_writer_sync.timeout.count").register(meterRegistry);
         this.processingLatencyTimer = Timer.builder("single_writer.processing.latency").register(meterRegistry);
         this.endToEndLatencyTimer = Timer.builder("single_writer.end_to_end.latency").register(meterRegistry);
+        this.syncResponseWaitLatencyTimer = Timer.builder("single_writer_sync.response_wait.latency")
+                .register(meterRegistry);
 
         registerQueueDepthGauges();
         registerDomainFailureCounters();
@@ -124,6 +138,45 @@ public class SingleWriterEnrollmentQueueService {
         return SingleWriterEnqueueResult.of(false, command.getCommandId(), partitionIndex);
     }
 
+    public SingleWriterSyncResult enqueueAndWait(Long studentId, Long courseId, String scenarioType) {
+        SingleWriterEnrollmentCommand command = SingleWriterEnrollmentCommand.createSync(studentId, courseId, scenarioType);
+        int partitionIndex = partitionIndex(courseId);
+        boolean accepted = queues.get(partitionIndex).offer(command);
+
+        if (!accepted) {
+            rejectedCounter.increment();
+            meterRegistry.counter("single_writer.domain_failure.count", "reason", QUEUE_FULL_REASON).increment();
+            return SingleWriterSyncResult.queueFull(command.getCommandId(), partitionIndex);
+        }
+
+        enqueuedCounter.increment();
+
+        Instant waitStartedAt = Instant.now();
+        try {
+            CompletableFuture<SingleWriterProcessingResult> responseFuture = command.getResponseFuture();
+            SingleWriterProcessingResult processingResult = responseFuture.get(responseTimeoutMs, TimeUnit.MILLISECONDS);
+            return SingleWriterSyncResult.completed(command.getCommandId(), partitionIndex, processingResult);
+        } catch (TimeoutException e) {
+            syncTimeoutCounter.increment();
+            return SingleWriterSyncResult.timeout(command.getCommandId(), partitionIndex);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return SingleWriterSyncResult.completed(
+                    command.getCommandId(),
+                    partitionIndex,
+                    SingleWriterProcessingResult.failure(new IllegalStateException("응답 대기 중 인터럽트가 발생했습니다.", e))
+            );
+        } catch (ExecutionException e) {
+            return SingleWriterSyncResult.completed(
+                    command.getCommandId(),
+                    partitionIndex,
+                    SingleWriterProcessingResult.failure(new IllegalStateException("응답 대기 중 오류가 발생했습니다.", e))
+            );
+        } finally {
+            syncResponseWaitLatencyTimer.record(Duration.between(waitStartedAt, Instant.now()));
+        }
+    }
+
     public int partitionIndex(Long courseId) {
         return Math.floorMod(courseId.hashCode(), partitionCount);
     }
@@ -151,10 +204,12 @@ public class SingleWriterEnrollmentQueueService {
         try {
             processor.process(command);
             processedCounter.increment();
+            command.complete(SingleWriterProcessingResult.success());
         } catch (ApplicationException e) {
             failedCounter.increment();
             meterRegistry.counter("single_writer.domain_failure.count", "reason", e.getClass().getSimpleName())
                     .increment();
+            command.complete(SingleWriterProcessingResult.failure(e));
             log.debug(
                     "Single-writer domain failure. partition={}, commandId={}, reason={}, message={}",
                     partitionIndex,
@@ -166,6 +221,7 @@ public class SingleWriterEnrollmentQueueService {
             failedCounter.increment();
             meterRegistry.counter("single_writer.domain_failure.count", "reason", e.getClass().getSimpleName())
                     .increment();
+            command.complete(SingleWriterProcessingResult.failure(e));
             log.warn(
                     "Single-writer processing failure. partition={}, commandId={}, reason={}",
                     partitionIndex,

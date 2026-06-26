@@ -4,7 +4,7 @@
 
 이 단계의 목적은 Spring Boot + PostgreSQL 기반 수강신청 API에 k6 부하를 주입하고, 병목 지표를 관측할 수 있는 환경을 구축하는 것이다.
 
-중요한 점은 성능 개선이 아니라 측정 가능성이다. Baseline의 병목을 캐시나 외부 MQ로 숨기지 않고, 동기식 RDB 구조의 한계를 먼저 관찰한다. 이후 비교 실험군으로 Optimistic Lock과 Single Writer Queue를 같은 payload로 실행한다.
+중요한 점은 성능 개선이 아니라 측정 가능성이다. Baseline의 병목을 캐시나 외부 MQ로 숨기지 않고, 동기식 RDB 구조의 한계를 먼저 관찰한다. 이후 비교 실험군으로 Optimistic Lock, Single Writer Queue, Single Writer Sync를 같은 payload로 실행한다.
 
 ## 구성
 
@@ -22,7 +22,7 @@ Docker Compose 서비스:
 
 | 서비스 | 역할 |
 | --- | --- |
-| `app` | Baseline, Optimistic, Single Writer 수강신청 API |
+| `app` | Baseline, Optimistic, Single Writer, Single Writer Sync 수강신청 API |
 | `postgres` | 수강신청 DB |
 | `postgres-exporter` | PostgreSQL 지표 수집 |
 | `prometheus` | Spring/PostgreSQL/k6 지표 저장 |
@@ -41,6 +41,10 @@ Docker Compose 서비스:
 Baseline의 목적은 DB row lock, connection pool, SQL/FK/unique constraint 기반 방어가 어떤 병목을 만드는지 보는 것이다.
 
 Single Writer 실험은 외부 MQ 없이 애플리케이션 내부 `BlockingQueue`를 사용한다. 운영용 queue가 아니라, `courseId` 기준 partition과 worker 단일화를 통해 row lock 경합이 줄어드는지 비교하기 위한 로컬 실험군이다.
+
+`/api/single-writer/enrollments`는 enqueue 직후 202를 반환하는 접수형 API다.
+
+`/api/single-writer-sync/enrollments`는 같은 queue/worker 구조를 사용하지만 API thread가 worker 결과를 기다리는 동기 응답형 API다. 거래소 Matching Engine처럼 같은 key의 command를 single writer가 순차 처리하되, client는 처리 결과를 즉시 응답으로 받는 실험군이다.
 
 ## 사전 준비
 
@@ -229,6 +233,8 @@ CSV 컬럼:
 | `429` | queue capacity 초과 |
 | `5xx/status 0` | 시스템 실패 |
 
+`API_MODE=single-writer-sync`에서는 baseline/optimistic과 같은 기준을 사용한다. 즉 정상 수강신청은 `200`, 도메인 실패는 `400` 또는 `409`, queue full은 `429`, 응답 대기 timeout은 `504`다.
+
 도메인 실패 payload는 4xx로 방어되면 성공으로 본다. 5xx는 Baseline API 또는 DB 병목이 사용자 오류를 넘어 서버 실패로 전이된 신호다.
 
 `http_req_failed`는 threshold로 사용하지 않는다. k6의 기본 실패 판정은 4xx 도메인 실패까지 실패로 잡을 수 있기 때문이다.
@@ -287,6 +293,7 @@ response_body
 | `MAX_VUS` | `30000` | arrival-rate executor가 확장할 수 있는 최대 VU 수 |
 | `SINGLE_WRITER_PARTITION_COUNT` | `8` | app 컨테이너의 courseId partition 수 |
 | `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | app 컨테이너의 partition별 queue capacity |
+| `SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | single-writer-sync API thread가 worker 결과를 기다리는 최대 시간 |
 
 ### 피크 타임 Capacity Planning 테스트
 
@@ -333,9 +340,10 @@ Single Writer 실험 endpoint도 별도로 분리한다.
 
 ```text
 POST /api/single-writer/enrollments
+POST /api/single-writer-sync/enrollments
 ```
 
-k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 세 endpoint를 비교한다.
+k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 endpoint를 비교한다.
 
 ```bash
 PGPASSWORD=password psql -h localhost -U user -d enrollment \
@@ -355,11 +363,19 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
 
 API_MODE=single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer-sync SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
 Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 body의 `reason`은 발생한 예외 타입에 따라 `ObjectOptimisticLockingFailureException` 또는 `OptimisticLockException`이 된다.
 
 Single Writer는 enqueue 성공 시 202 Accepted를 반환한다. worker 처리 결과는 즉시 API 응답으로 전달하지 않고 Prometheus metric과 로그로 관측한다.
+
+Single Writer Sync는 enqueue 후 worker 결과를 기다린다. worker가 성공하면 200, 도메인 실패를 반환하면 기존 baseline과 같은 4xx 응답을 반환한다. `SINGLE_WRITER_RESPONSE_TIMEOUT_MS`를 넘기면 504를 반환한다. timeout 이후에도 이미 queue에 들어간 command는 worker에서 처리될 수 있다.
 
 Endpoint mapping:
 
@@ -368,6 +384,7 @@ Endpoint mapping:
 | `baseline` | `/api/baseline/enrollments` |
 | `optimistic` | `/api/optimistic/enrollments` |
 | `single-writer` | `/api/single-writer/enrollments` |
+| `single-writer-sync` | `/api/single-writer-sync/enrollments` |
 
 ## 수집 지표
 
@@ -396,6 +413,8 @@ Endpoint mapping:
 | `single_writer_processing_latency_seconds` | worker가 command 하나를 DB 처리하는 시간 |
 | `single_writer_end_to_end_latency_seconds` | enqueue부터 worker 처리 완료까지 걸린 시간 |
 | `single_writer_domain_failure_count_total{reason="..."}` | worker 도메인 실패 또는 queue full 사유별 count |
+| `single_writer_sync_timeout_count_total` | single-writer-sync 응답 대기 timeout 수 |
+| `single_writer_sync_response_wait_latency_seconds` | API thread가 worker 결과를 기다린 시간 |
 
 ### PostgreSQL / postgres-exporter
 
