@@ -193,6 +193,8 @@ Prometheus는 다음 옵션으로 remote write receiver를 활성화한다.
 --web.enable-remote-write-receiver
 ```
 
+`k6-prometheus`는 Prometheus native histogram feature를 켜지 않은 기본 Prometheus와 호환되도록 `K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=false`로 실행한다. 이 값을 `true`로 두면 Prometheus가 `/api/v1/write`에서 `native histograms are disabled` 에러와 함께 500을 반환한다.
+
 ## k6 Payload 처리
 
 k6는 Mock Data Harness의 payload를 그대로 읽는다.

@@ -58,11 +58,19 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/lo
 docker compose up --build -d app postgres-exporter prometheus grafana
 ```
 
-k6 실행:
+summary JSON 기반 k6 실행:
 
 ```bash
 docker compose --profile load run --rm k6
 ```
+
+Prometheus remote-write 기반 k6 실행:
+
+```bash
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+`k6-prometheus`는 Prometheus native histogram feature를 켜지 않은 기본 Prometheus와 호환되도록 `K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=false`로 실행한다. 이 값을 `true`로 두면 Prometheus가 `/api/v1/write`에서 `native histograms are disabled` 에러와 함께 500을 반환한다.
 
 > k6 이미지는 `K6_VERSION`으로 교체할 수 있다. `grafana/k6:0.54.0`에서 80,000 payload × 200 VU 초기화 중 `SIGSEGV`/panic이 발생하면 최신 이미지로 실행한다.
 >
@@ -77,11 +85,25 @@ SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
 docker compose --profile load run --rm k6
 ```
 
+Prometheus remote-write smoke test:
+
+```bash
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
 스케줄을 켠 상태의 burst test:
 
 ```bash
 SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load run --rm k6
+```
+
+Grafana에서 k6 지표까지 함께 볼 때:
+
+```bash
+SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
 `grafana/k6:0.54.0`에서 200 VU 전체 burst가 k6 런타임 내부 crash를 일으키는 환경이면 다음 순서로 확인한다.
