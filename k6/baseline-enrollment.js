@@ -31,53 +31,23 @@ const reasonCounters = createReasonCounters();
 const responseSamples = [];
 
 const payloads = new SharedArray('enrollment payloads', () => {
-  const raw = open(PAYLOAD_PATH).trim().replace(/^\uFEFF/, '');
-  const [headerLine, ...lines] = raw.split(/\r?\n/);
-  const headers = headerLine.split(',').map((header) => header.trim());
-  validateHeaders(headers);
-
-  let rows = lines.map((line, index) => {
-    const values = line.split(',');
-    const row = {
-      request_id: index + 1,
-      ...Object.fromEntries(headers.map((header, valueIndex) => [header, normalizeCell(values[valueIndex])])),
-    };
-    row.scenario_type = normalizeScenario(row.scenario_type);
-    row.expected_status = normalizeCell(row.expected_status);
-    return row;
-  });
-
-  validateRows(rows);
-
-  rows = rows.sort((left, right) => {
-    const leftOffset = Number(left.scheduled_offset_ms || 0);
-    const rightOffset = Number(right.scheduled_offset_ms || 0);
-    if (leftOffset !== rightOffset) {
-      return leftOffset - rightOffset;
-    }
-    return Number(left.request_id) - Number(right.request_id);
-  });
-
-  if (SCENARIO_FILTER && SCENARIO_FILTER.toUpperCase() !== 'ALL') {
-    const allowed = new Set(
-      SCENARIO_FILTER
-        .split(',')
-        .map((scenario) => normalizeScenario(scenario))
-        .filter(Boolean)
-    );
-    rows = rows.filter((row) => allowed.has(row.scenario_type));
-  }
-
-  if (LIMIT > 0) {
-    rows = rows.slice(0, LIMIT);
-  }
-
-  return rows;
+  return loadPayloadRows();
 });
 
-const PAYLOAD_SCENARIO_DISTRIBUTION = countValues(payloads, 'scenario_type', SCENARIOS);
-const PAYLOAD_EXPECTED_STATUS_DISTRIBUTION = countValues(payloads, 'expected_status', ['200', '400', '409']);
-validateLoadedPayloadDistribution(PAYLOAD_SCENARIO_DISTRIBUTION, PAYLOAD_EXPECTED_STATUS_DISTRIBUTION, payloads.length);
+const payloadMetadata = new SharedArray('enrollment payload metadata', () => {
+  const rows = loadPayloadRows();
+  const metadata = {
+    row_count: rows.length,
+    scenario_distribution: countValues(rows, 'scenario_type', SCENARIOS),
+    expected_status_distribution: countValues(rows, 'expected_status', ['200', '400', '409']),
+  };
+  return [metadata];
+});
+
+const PAYLOAD_METADATA = payloadMetadata[0];
+const PAYLOAD_SCENARIO_DISTRIBUTION = PAYLOAD_METADATA.scenario_distribution;
+const PAYLOAD_EXPECTED_STATUS_DISTRIBUTION = PAYLOAD_METADATA.expected_status_distribution;
+validateLoadedPayloadDistribution(PAYLOAD_SCENARIO_DISTRIBUTION, PAYLOAD_EXPECTED_STATUS_DISTRIBUTION, PAYLOAD_METADATA.row_count);
 
 const EFFECTIVE_ITERATIONS = REQUESTED_ITERATIONS || payloads.length;
 const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
@@ -208,6 +178,51 @@ function createReasonCounters() {
     PrerequisiteNotMetException: new Counter('baseline_reason_prerequisite_not_met_total'),
     Unknown: new Counter('baseline_reason_unknown_total'),
   };
+}
+
+function loadPayloadRows() {
+  const raw = open(PAYLOAD_PATH).trim().replace(/^\uFEFF/, '');
+  const [headerLine, ...lines] = raw.split(/\r?\n/);
+  const headers = headerLine.split(',').map((header) => header.trim());
+  validateHeaders(headers);
+
+  let rows = lines.map((line, index) => {
+    const values = line.split(',');
+    const row = {
+      request_id: index + 1,
+      ...Object.fromEntries(headers.map((header, valueIndex) => [header, normalizeCell(values[valueIndex])])),
+    };
+    row.scenario_type = normalizeScenario(row.scenario_type);
+    row.expected_status = normalizeCell(row.expected_status);
+    return row;
+  });
+
+  validateRows(rows);
+
+  rows = rows.sort((left, right) => {
+    const leftOffset = Number(left.scheduled_offset_ms || 0);
+    const rightOffset = Number(right.scheduled_offset_ms || 0);
+    if (leftOffset !== rightOffset) {
+      return leftOffset - rightOffset;
+    }
+    return Number(left.request_id) - Number(right.request_id);
+  });
+
+  if (SCENARIO_FILTER && SCENARIO_FILTER.toUpperCase() !== 'ALL') {
+    const allowed = new Set(
+      SCENARIO_FILTER
+        .split(',')
+        .map((scenario) => normalizeScenario(scenario))
+        .filter(Boolean)
+    );
+    rows = rows.filter((row) => allowed.has(row.scenario_type));
+  }
+
+  if (LIMIT > 0) {
+    rows = rows.slice(0, LIMIT);
+  }
+
+  return rows;
 }
 
 function addReason(reason, scenarioType) {

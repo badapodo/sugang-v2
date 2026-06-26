@@ -64,6 +64,12 @@ k6 실행:
 docker compose --profile load run --rm k6
 ```
 
+> k6 이미지는 `K6_VERSION`으로 교체할 수 있다. `grafana/k6:0.54.0`에서 80,000 payload × 200 VU 초기화 중 `SIGSEGV`/panic이 발생하면 최신 이미지로 실행한다.
+>
+> ```bash
+> K6_VERSION=latest docker compose --profile load run --rm k6
+> ```
+
 NORMAL 100건 스모크 테스트:
 
 ```bash
@@ -75,6 +81,22 @@ docker compose --profile load run --rm k6
 
 ```bash
 SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load run --rm k6
+```
+
+`grafana/k6:0.54.0`에서 200 VU 전체 burst가 k6 런타임 내부 crash를 일으키는 환경이면 다음 순서로 확인한다.
+
+```bash
+# 1. 앱/DB/API 검증용 smoke
+SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+
+# 2. 전체 payload 로드 + 축소 실행 검증
+SCENARIO_FILTER=ALL ITERATIONS=1000 VUS=10 MAX_DURATION=60s \
+docker compose --profile load run --rm k6
+
+# 3. k6 이미지 업그레이드 후 burst 재시도
+K6_VERSION=latest SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=300s \
 docker compose --profile load run --rm k6
 ```
 

@@ -68,7 +68,7 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
 
   k6:
-    image: grafana/k6:0.54.0
+    image: grafana/k6:${K6_VERSION:-latest}
     container_name: sugang-v2-baseline-k6
     depends_on:
       - app
@@ -94,7 +94,7 @@ services:
       - /scripts/baseline-enrollment.js
 
   k6-prometheus:
-    image: grafana/k6:0.54.0
+    image: grafana/k6:${K6_VERSION:-latest}
     container_name: sugang-v2-baseline-k6-prometheus
     depends_on:
       - app

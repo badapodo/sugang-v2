@@ -116,6 +116,14 @@ docker compose --profile load run --rm k6
 output/k6/baseline-summary.json
 ```
 
+k6 이미지는 `docker-compose.yml`에서 다음처럼 버전 교체가 가능하다.
+
+```bash
+K6_VERSION=latest docker compose --profile load run --rm k6
+```
+
+`grafana/k6:0.54.0`에서 `80,000 payload × 200 VU` 초기화 중 `SIGSEGV` 또는 `panic: runtime error`가 발생하면 앱/DB 장애가 아니라 k6 런타임 조합 문제로 본다. 이 경우 k6 이미지를 올리거나, 아래 축소 테스트로 환경 정상성을 먼저 확인한다.
+
 로컬에서 직접 실행할 수도 있다.
 
 ```bash
@@ -140,6 +148,20 @@ docker compose --profile load run --rm k6
 ```
 
 Burst test는 `scheduled_offset_ms`를 테스트 시작 기준 절대 오프셋으로 사용한다.
+
+안정성 분리 검증용 축소 테스트:
+
+```bash
+SCENARIO_FILTER=ALL ITERATIONS=1000 VUS=10 MAX_DURATION=60s \
+docker compose --profile load run --rm k6
+```
+
+전체 burst를 끝까지 관측하려면 Baseline row lock 병목 때문에 `MAX_DURATION`을 충분히 길게 둔다.
+
+```bash
+K6_VERSION=latest SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=300s \
+docker compose --profile load run --rm k6
+```
 
 특정 scenario만 실행할 수도 있다.
 
@@ -237,8 +259,10 @@ response_body
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
+| `ITERATIONS` | `1000` | payload는 전체 로드하되 실행 iteration 수만 제한 |
 | `IGNORE_SCHEDULE` | `true` | `true`이면 `scheduled_offset_ms`를 무시하고 즉시 요청 |
 | `MAX_DURATION` | `15s` | 최대 실행 시간 |
+| `K6_VERSION` | `latest` | `grafana/k6` 이미지 태그. 0.54.0 런타임 crash 회피 시 사용 |
 
 ## 수집 지표
 
