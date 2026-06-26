@@ -285,6 +285,7 @@ response_body
 | 지표 | 의미 |
 | --- | --- |
 | `pg_stat_activity_count` | DB connection/session 상태 |
+| `pg_stat_activity_wait_count` | custom query 기반 wait event 상태. `wait_event_type="Lock"`으로 lock wait 세션 수 확인 |
 | `pg_stat_database_deadlocks` | deadlock 발생 수 |
 | `pg_locks_count` | lock 상태 |
 
@@ -327,6 +328,12 @@ Sugang Baseline Load Test
 | HikariCP active/pending | connection pool 포화 여부 확인 |
 | PostgreSQL connections | DB session 상태 확인 |
 | PostgreSQL lock wait / deadlock | row lock 경합과 deadlock 발생 여부 확인 |
+
+`postgres-exporter` 기본 `pg_stat_activity_count` metric에는 `wait_event_type` 라벨이 없다. 따라서 lock wait 세션 수는 custom query로 추가한 `pg_stat_activity_wait_count`를 사용한다.
+
+```promql
+sum(pg_stat_activity_wait_count{job="postgres-exporter", datname="enrollment", wait_event_type="Lock"}) or vector(0)
+```
 
 ## 해석 기준
 

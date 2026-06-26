@@ -1,0 +1,22 @@
+pg_stat_activity_wait:
+  query: |
+    SELECT
+      datname,
+      COALESCE(wait_event_type, 'none') AS wait_event_type,
+      COALESCE(wait_event, 'none') AS wait_event,
+      COUNT(*)::float AS count
+    FROM pg_stat_activity
+    GROUP BY datname, wait_event_type, wait_event
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - wait_event_type:
+        usage: "LABEL"
+        description: "PostgreSQL wait event type"
+    - wait_event:
+        usage: "LABEL"
+        description: "PostgreSQL wait event"
+    - count:
+        usage: "GAUGE"
+        description: "Number of sessions grouped by wait event type and wait event"

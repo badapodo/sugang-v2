@@ -36,6 +36,10 @@ services:
       - "9187:9187"
     environment:
       DATA_SOURCE_NAME: postgresql://user:password@postgres:5432/enrollment?sslmode=disable
+    command:
+      - --extend.query-path=/etc/postgres-exporter/queries.yml
+    volumes:
+      - ./infra/postgres-exporter/queries.yml:/etc/postgres-exporter/queries.yml:ro
 
   prometheus:
     image: prom/prometheus:v2.54.1

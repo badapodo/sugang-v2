@@ -36,6 +36,7 @@ k6
 | `docs/api-spec.md` | Baseline API 요청/응답 명세 |
 | `docs/key-code.md` | 주요 코드 흐름과 책임 정리 |
 | `docs/load-test-environment.md` | k6, Prometheus, Grafana 기반 부하 테스트 환경 |
+| `docs/postgres-slow-query-analysis.md` | 부하 테스트 중 PostgreSQL slow SQL 수집 및 EXPLAIN ANALYZE 절차 |
 
 ## 실행
 

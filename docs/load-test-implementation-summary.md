@@ -523,7 +523,7 @@ compose command:
 | `HTTP status ratio` | 2xx/4xx/5xx별 `http_server_requests_seconds_count` 비율 |
 | `HikariCP active/pending` | `hikaricp_connections_active`, `hikaricp_connections_pending`, `hikaricp_connections_max` |
 | `PostgreSQL connections` | `sum(pg_stat_activity_count{job="postgres-exporter"}) by (state)` |
-| `PostgreSQL lock wait / deadlock` | `sum(pg_stat_activity_count{job="postgres-exporter", wait_event_type="Lock"})`, `sum(rate(pg_stat_database_deadlocks{job="postgres-exporter"}[1m]))` |
+| `PostgreSQL lock wait / deadlock` | `sum(pg_stat_activity_wait_count{job="postgres-exporter", datname="enrollment", wait_event_type="Lock"}) or vector(0)`, `sum(rate(pg_stat_database_deadlocks{job="postgres-exporter"}[1m]))` |
 
 ### 미구현 또는 TODO
 

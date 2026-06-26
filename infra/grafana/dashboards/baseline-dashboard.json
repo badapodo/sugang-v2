@@ -251,7 +251,7 @@
       },
       "targets": [
         {
-          "expr": "sum(pg_stat_activity_count{job=\"postgres-exporter\", wait_event_type=\"Lock\"})",
+          "expr": "sum(pg_stat_activity_wait_count{job=\"postgres-exporter\", datname=\"enrollment\", wait_event_type=\"Lock\"}) or vector(0)",
           "legendFormat": "lock wait sessions"
         },
         {
