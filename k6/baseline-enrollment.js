@@ -2,6 +2,7 @@ import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
 import { SharedArray } from 'k6/data';
 import { Counter, Rate } from 'k6/metrics';
+import exec from 'k6/execution';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const PAYLOAD_PATH = __ENV.PAYLOAD_PATH || '../mock/sugang-mock/output/csv/enrollment_payload.csv';
@@ -105,7 +106,8 @@ export default function () {
     fail(`No payload rows loaded from ${PAYLOAD_PATH}. SCENARIO_FILTER=${SCENARIO_FILTER || '-'}`);
   }
 
-  const row = payloads[__ITER % payloads.length];
+  const iterationIndex = exec.scenario.iterationInTest;
+  const row = payloads[iterationIndex % payloads.length];
 
   if (!IGNORE_SCHEDULE) {
     const scheduledOffsetMs = Number(row.scheduled_offset_ms || 0);
