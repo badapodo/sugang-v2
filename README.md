@@ -37,6 +37,7 @@ k6
 | `docs/key-code.md` | 주요 코드 흐름과 책임 정리 |
 | `docs/load-test-environment.md` | k6, Prometheus, Grafana 기반 부하 테스트 환경 |
 | `docs/postgres-slow-query-analysis.md` | 부하 테스트 중 PostgreSQL slow SQL 수집 및 EXPLAIN ANALYZE 절차 |
+| `docs/peak-traffic-capacity-test.md` | 초반 10초 60% 집중 유입을 검증하는 constant-arrival-rate 기반 피크 트래픽 테스트 |
 
 ## 실행
 
@@ -106,6 +107,22 @@ Grafana에서 k6 지표까지 함께 볼 때:
 SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
+
+피크 타임 Capacity Planning 테스트:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+EXECUTOR_MODE=peak-arrival-rate \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+이 테스트는 80,000건 중 48,000건을 첫 10초에, 32,000건을 이후 20초에 주입한다. `dropped_iterations=0`, `baseline_critical_mismatch_total=0`, `baseline_system_failure_rate<0.005`, `p99<5000ms`를 기준으로 본다.
 
 `grafana/k6:0.54.0`에서 200 VU 전체 burst가 k6 런타임 내부 crash를 일으키는 환경이면 다음 순서로 확인한다.
 

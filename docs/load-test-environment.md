@@ -265,6 +265,40 @@ response_body
 | `IGNORE_SCHEDULE` | `true` | `true`이면 `scheduled_offset_ms`를 무시하고 즉시 요청 |
 | `MAX_DURATION` | `15s` | 최대 실행 시간 |
 | `K6_VERSION` | `latest` | `grafana/k6` 이미지 태그. 0.54.0 런타임 crash 회피 시 사용 |
+| `EXECUTOR_MODE` | `peak-arrival-rate` | 기본값은 `shared-iterations`. 피크 트래픽 Capacity Planning은 `peak-arrival-rate` 사용 |
+| `PEAK_RATE` | `4800` | 피크 구간 초당 요청 유입률 |
+| `PEAK_DURATION` | `10s` | 피크 구간 지속 시간 |
+| `TAIL_RATE` | `1600` | 후속 구간 초당 요청 유입률 |
+| `TAIL_DURATION` | `20s` | 후속 구간 지속 시간 |
+| `PRE_ALLOCATED_VUS` | `5000` | arrival-rate executor가 미리 확보할 VU 수 |
+| `MAX_VUS` | `30000` | arrival-rate executor가 확장할 수 있는 최대 VU 수 |
+
+### 피크 타임 Capacity Planning 테스트
+
+전체 80,000건 중 60%인 48,000건을 첫 10초에, 나머지 32,000건을 이후 20초에 주입한다.
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+EXECUTOR_MODE=peak-arrival-rate \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+`peak-arrival-rate` 모드는 k6 `constant-arrival-rate` executor를 사용한다. 이 모드에서는 `scheduled_offset_ms`를 무시하고 k6 arrival scheduler가 요청 유입 시점을 통제한다.
+
+성공 기준:
+
+| 항목 | 기준 |
+| --- | --- |
+| `dropped_iterations` | 0 |
+| `baseline_critical_mismatch_total` | 0 |
+| `baseline_system_failure_rate` | `< 0.005` |
+| `http_req_duration p(99)` | `< 5000ms` |
 
 ## 수집 지표
 

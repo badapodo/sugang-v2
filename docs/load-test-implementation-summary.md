@@ -149,6 +149,14 @@ app container resource:
 | `SCENARIO_FILTER` | `${SCENARIO_FILTER:-}` |
 | `IGNORE_SCHEDULE` | `${IGNORE_SCHEDULE:-false}` |
 | `MAX_DURATION` | `${MAX_DURATION:-45s}` |
+| `EXECUTOR_MODE` | `${EXECUTOR_MODE:-shared-iterations}` |
+| `PEAK_RATE` | `${PEAK_RATE:-4800}` |
+| `PEAK_DURATION` | `${PEAK_DURATION:-10s}` |
+| `TAIL_RATE` | `${TAIL_RATE:-1600}` |
+| `TAIL_DURATION` | `${TAIL_DURATION:-20s}` |
+| `ARRIVAL_TIME_UNIT` | `${ARRIVAL_TIME_UNIT:-1s}` |
+| `PRE_ALLOCATED_VUS` | `${PRE_ALLOCATED_VUS:-200}` |
+| `MAX_VUS` | `${MAX_VUS:-200}` |
 
 `k6-prometheus`에는 추가로 다음 변수가 있다.
 

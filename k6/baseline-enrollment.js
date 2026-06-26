@@ -12,6 +12,14 @@ const LIMIT = Number(__ENV.LIMIT || 0);
 const REQUESTED_VUS = Number(__ENV.VUS || 200);
 const REQUESTED_ITERATIONS = Number(__ENV.ITERATIONS || 0);
 const IGNORE_SCHEDULE = (__ENV.IGNORE_SCHEDULE || 'false').toLowerCase() === 'true';
+const EXECUTOR_MODE = (__ENV.EXECUTOR_MODE || 'shared-iterations').trim().toLowerCase();
+const PEAK_RATE = Number(__ENV.PEAK_RATE || 4800);
+const PEAK_DURATION = __ENV.PEAK_DURATION || '10s';
+const TAIL_RATE = Number(__ENV.TAIL_RATE || 1600);
+const TAIL_DURATION = __ENV.TAIL_DURATION || '20s';
+const ARRIVAL_TIME_UNIT = __ENV.ARRIVAL_TIME_UNIT || '1s';
+const PRE_ALLOCATED_VUS = Number(__ENV.PRE_ALLOCATED_VUS || REQUESTED_VUS);
+const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(PRE_ALLOCATED_VUS, REQUESTED_VUS));
 const SAMPLE_LIMIT = 20;
 
 const SCENARIOS = ['NORMAL', 'HOTSPOT', 'PREREQUISITE_FAIL', 'TIME_CONFLICT', 'CAPACITY_OVER', 'DUPLICATE'];
@@ -51,18 +59,20 @@ validateLoadedPayloadDistribution(PAYLOAD_SCENARIO_DISTRIBUTION, PAYLOAD_EXPECTE
 
 const EFFECTIVE_ITERATIONS = REQUESTED_ITERATIONS || payloads.length;
 const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
+const PEAK_DURATION_SECONDS = durationToSeconds(PEAK_DURATION);
+const TAIL_DURATION_SECONDS = durationToSeconds(TAIL_DURATION);
+const PEAK_ITERATIONS = Math.round(PEAK_RATE * PEAK_DURATION_SECONDS);
+const TAIL_ITERATIONS = Math.round(TAIL_RATE * TAIL_DURATION_SECONDS);
+const ARRIVAL_ITERATIONS = PEAK_ITERATIONS + TAIL_ITERATIONS;
+const IS_PEAK_ARRIVAL_RATE = EXECUTOR_MODE === 'peak-arrival-rate';
+
+validateExecutorMode();
 
 export const options = {
-  scenarios: {
-    baseline_enrollment: {
-      executor: 'shared-iterations',
-      vus: EFFECTIVE_VUS,
-      iterations: EFFECTIVE_ITERATIONS,
-      maxDuration: MAX_DURATION,
-    },
-  },
+  scenarios: buildScenarios(),
   thresholds: {
     http_req_duration: ['p(95)<2000', 'p(99)<5000'],
+    dropped_iterations: ['count<1'],
     baseline_critical_mismatch_total: ['count<1'],
     baseline_system_failure_rate: ['rate<0.005'],
   },
@@ -72,14 +82,39 @@ export const options = {
 const startedAt = Date.now();
 
 export default function () {
+  runSharedIteration();
+}
+
+export function peakArrival() {
+  runArrivalIteration(0);
+}
+
+export function tailArrival() {
+  runArrivalIteration(PEAK_ITERATIONS);
+}
+
+function runSharedIteration() {
   if (payloads.length === 0) {
     fail(`No payload rows loaded from ${PAYLOAD_PATH}. SCENARIO_FILTER=${SCENARIO_FILTER || '-'}`);
   }
 
   const iterationIndex = exec.scenario.iterationInTest;
   const row = payloads[iterationIndex % payloads.length];
+  runEnrollment(row);
+}
 
-  if (!IGNORE_SCHEDULE) {
+function runArrivalIteration(offset) {
+  if (payloads.length === 0) {
+    fail(`No payload rows loaded from ${PAYLOAD_PATH}. SCENARIO_FILTER=${SCENARIO_FILTER || '-'}`);
+  }
+
+  const iterationIndex = offset + exec.scenario.iterationInTest;
+  const row = payloads[iterationIndex % payloads.length];
+  runEnrollment(row);
+}
+
+function runEnrollment(row) {
+  if (!IGNORE_SCHEDULE && !IS_PEAK_ARRIVAL_RATE) {
     const scheduledOffsetMs = Number(row.scheduled_offset_ms || 0);
     const targetTime = startedAt + scheduledOffsetMs;
     const waitMs = targetTime - Date.now();
@@ -148,6 +183,41 @@ export default function () {
     'no critical mismatch': () => !critical,
     'no system failure': () => !systemFailure,
   });
+}
+
+function buildScenarios() {
+  if (IS_PEAK_ARRIVAL_RATE) {
+    return {
+      peak_arrival: {
+        executor: 'constant-arrival-rate',
+        exec: 'peakArrival',
+        rate: PEAK_RATE,
+        timeUnit: ARRIVAL_TIME_UNIT,
+        duration: PEAK_DURATION,
+        preAllocatedVUs: PRE_ALLOCATED_VUS,
+        maxVUs: MAX_VUS,
+      },
+      tail_arrival: {
+        executor: 'constant-arrival-rate',
+        exec: 'tailArrival',
+        rate: TAIL_RATE,
+        timeUnit: ARRIVAL_TIME_UNIT,
+        duration: TAIL_DURATION,
+        startTime: PEAK_DURATION,
+        preAllocatedVUs: PRE_ALLOCATED_VUS,
+        maxVUs: MAX_VUS,
+      },
+    };
+  }
+
+  return {
+    baseline_enrollment: {
+      executor: 'shared-iterations',
+      vus: EFFECTIVE_VUS,
+      iterations: EFFECTIVE_ITERATIONS,
+      maxDuration: MAX_DURATION,
+    },
+  };
 }
 
 export function handleSummary(data) {
@@ -324,6 +394,47 @@ function validateLoadedPayloadDistribution(scenarioDistribution, statusDistribut
   }
 }
 
+function validateExecutorMode() {
+  const supportedModes = ['shared-iterations', 'peak-arrival-rate'];
+  if (!supportedModes.includes(EXECUTOR_MODE)) {
+    throw new Error(`Unsupported EXECUTOR_MODE=${EXECUTOR_MODE}. Supported modes: ${supportedModes.join(', ')}`);
+  }
+
+  if (!IS_PEAK_ARRIVAL_RATE) {
+    return;
+  }
+
+  if (ARRIVAL_TIME_UNIT !== '1s') {
+    throw new Error(`Unsupported ARRIVAL_TIME_UNIT=${ARRIVAL_TIME_UNIT}. Peak capacity planning currently expects 1s.`);
+  }
+
+  if (PEAK_RATE <= 0 || TAIL_RATE <= 0) {
+    throw new Error(`Invalid peak arrival rates. PEAK_RATE=${PEAK_RATE}, TAIL_RATE=${TAIL_RATE}`);
+  }
+
+  if (PEAK_ITERATIONS + TAIL_ITERATIONS > payloads.length) {
+    throw new Error(`Peak arrival test requires at least ${ARRIVAL_ITERATIONS} payload rows, but loaded ${payloads.length}. SCENARIO_FILTER=${SCENARIO_FILTER || 'ALL'}, LIMIT=${LIMIT || 'ALL'}`);
+  }
+}
+
+function durationToSeconds(value) {
+  const normalized = String(value || '').trim();
+  const matched = normalized.match(/^(\d+(?:\.\d+)?)(ms|s|m)$/);
+  if (!matched) {
+    throw new Error(`Invalid duration=${value}. Supported units: ms, s, m`);
+  }
+
+  const amount = Number(matched[1]);
+  const unit = matched[2];
+  if (unit === 'ms') {
+    return amount / 1000;
+  }
+  if (unit === 'm') {
+    return amount * 60;
+  }
+  return amount;
+}
+
 function normalizeMetricPart(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]+/g, '_');
 }
@@ -380,18 +491,22 @@ function textSummary(data) {
   const critical = metrics.baseline_critical_mismatch_total?.values || {};
   const systemFailure = metrics.baseline_system_failure_rate?.values || {};
   const systemFailureTotal = metrics.baseline_system_failure_total?.values || {};
+  const droppedIterations = metrics.dropped_iterations?.values || {};
 
   return [
     '',
     'Baseline enrollment load test summary',
+    `- executor mode: ${EXECUTOR_MODE}`,
     `- scenario filter: ${SCENARIO_FILTER || 'ALL'}`,
     `- payload limit: ${LIMIT || 'ALL'}`,
-    `- ignore schedule: ${IGNORE_SCHEDULE}`,
-    `- effective iterations: ${EFFECTIVE_ITERATIONS}`,
+    `- ignore schedule: ${IS_PEAK_ARRIVAL_RATE ? 'true (forced by peak-arrival-rate)' : IGNORE_SCHEDULE}`,
+    `- effective iterations: ${IS_PEAK_ARRIVAL_RATE ? ARRIVAL_ITERATIONS : EFFECTIVE_ITERATIONS}`,
+    `- peak arrival: ${formatArrivalPlan()}`,
     `- requested VUs: ${REQUESTED_VUS}`,
-    `- effective VUs: ${EFFECTIVE_VUS}`,
+    `- effective VUs: ${IS_PEAK_ARRIVAL_RATE ? `${PRE_ALLOCATED_VUS} pre-allocated, ${MAX_VUS} max` : EFFECTIVE_VUS}`,
     `- loaded payload rows: ${payloads.length}`,
     `- requests: ${requests.count ?? 0}`,
+    `- dropped iterations: ${droppedIterations.count ?? 0}`,
     `- request rate: ${formatNumber(requests.rate)} req/s`,
     `- strict mismatch count: ${strictMismatch.count ?? 0}`,
     `- critical mismatch count: ${critical.count ?? 0}`,
@@ -416,6 +531,14 @@ function textSummary(data) {
     formatMismatchSamples(data),
     '',
   ].join('\n');
+}
+
+function formatArrivalPlan() {
+  if (!IS_PEAK_ARRIVAL_RATE) {
+    return '-';
+  }
+
+  return `${PEAK_RATE}/s for ${PEAK_DURATION} (${PEAK_ITERATIONS}), then ${TAIL_RATE}/s for ${TAIL_DURATION} (${TAIL_ITERATIONS})`;
 }
 
 function formatDistribution(distribution, keys) {
