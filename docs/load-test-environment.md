@@ -2,9 +2,9 @@
 
 ## 목적
 
-이 단계의 목적은 Spring Boot + PostgreSQL 기반 Baseline 수강신청 API에 k6 부하를 주입하고, 병목 지표를 관측할 수 있는 환경을 구축하는 것이다.
+이 단계의 목적은 Spring Boot + PostgreSQL 기반 수강신청 API에 k6 부하를 주입하고, 병목 지표를 관측할 수 있는 환경을 구축하는 것이다.
 
-중요한 점은 성능 개선이 아니라 측정 가능성이다. Redis, MQ, Kafka, 비동기 큐는 이번 단계에서 사용하지 않는다. Baseline의 병목을 캐시나 큐로 숨기지 않고, 동기식 RDB 구조의 한계를 그대로 관찰한다.
+중요한 점은 성능 개선이 아니라 측정 가능성이다. Baseline의 병목을 캐시나 외부 MQ로 숨기지 않고, 동기식 RDB 구조의 한계를 먼저 관찰한다. 이후 비교 실험군으로 Optimistic Lock과 Single Writer Queue를 같은 payload로 실행한다.
 
 ## 구성
 
@@ -22,7 +22,7 @@ Docker Compose 서비스:
 
 | 서비스 | 역할 |
 | --- | --- |
-| `app` | Baseline 수강신청 API |
+| `app` | Baseline, Optimistic, Single Writer 수강신청 API |
 | `postgres` | 수강신청 DB |
 | `postgres-exporter` | PostgreSQL 지표 수집 |
 | `prometheus` | Spring/PostgreSQL/k6 지표 저장 |
@@ -30,16 +30,17 @@ Docker Compose 서비스:
 | `k6` | summary JSON 기반 부하 테스트 |
 | `k6-prometheus` | Prometheus remote-write 기반 부하 테스트 |
 
-## 제외한 것
+## 제외한 것과 추가 실험군
 
 - Redis
 - MQ
 - Kafka
 - RabbitMQ
-- 비동기 대기열
 - 캐시 기반 정원 차감
 
 Baseline의 목적은 DB row lock, connection pool, SQL/FK/unique constraint 기반 방어가 어떤 병목을 만드는지 보는 것이다.
+
+Single Writer 실험은 외부 MQ 없이 애플리케이션 내부 `BlockingQueue`를 사용한다. 운영용 queue가 아니라, `courseId` 기준 partition과 worker 단일화를 통해 row lock 경합이 줄어드는지 비교하기 위한 로컬 실험군이다.
 
 ## 사전 준비
 
@@ -220,6 +221,14 @@ CSV 컬럼:
 | `200` | 정확히 HTTP 200 |
 | `400` | HTTP 4xx 전체를 도메인 실패 정상 응답으로 인정 |
 
+`API_MODE=single-writer`에서는 응답 의미가 다르다. API는 DB 처리 완료가 아니라 queue 접수 결과를 반환한다.
+
+| status | 의미 |
+| --- | --- |
+| `202` | queue 접수 성공 |
+| `429` | queue capacity 초과 |
+| `5xx/status 0` | 시스템 실패 |
+
 도메인 실패 payload는 4xx로 방어되면 성공으로 본다. 5xx는 Baseline API 또는 DB 병목이 사용자 오류를 넘어 서버 실패로 전이된 신호다.
 
 `http_req_failed`는 threshold로 사용하지 않는다. k6의 기본 실패 판정은 4xx 도메인 실패까지 실패로 잡을 수 있기 때문이다.
@@ -232,6 +241,8 @@ CSV 컬럼:
 | `baseline_critical_mismatch_total` | expected 400이 200으로 성공했거나 5xx/네트워크 실패 발생 | `count < 1` |
 | `baseline_strict_expected_status_mismatch_total` | expected_status와 실제 응답 분류 불일치 수 | summary에서 원인 확인 |
 | `baseline_status_<scenario>_<status>_total` | scenario_type별 HTTP status count | summary에서 분포 확인 |
+| `baseline_accepted_total` | baseline/optimistic은 HTTP 200, single-writer는 HTTP 202 count | summary에서 접수량 확인 |
+| `baseline_queue_full_total` | single-writer HTTP 429 count | summary에서 queue 포화 확인 |
 
 Mismatch 분류:
 
@@ -259,7 +270,7 @@ response_body
 | 환경변수 | 예시 | 설명 |
 | --- | --- | --- |
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
-| `API_MODE` | `baseline` | `baseline`이면 `/api/baseline/enrollments`, `optimistic`이면 `/api/optimistic/enrollments` 호출 |
+| `API_MODE` | `baseline` | `baseline`, `optimistic`, `single-writer` endpoint 선택 |
 | `BASE_PATH` | `/api/optimistic/enrollments` | `API_MODE` 대신 직접 호출 path를 지정할 때 사용 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
@@ -274,6 +285,8 @@ response_body
 | `TAIL_DURATION` | `20s` | 후속 구간 지속 시간 |
 | `PRE_ALLOCATED_VUS` | `5000` | arrival-rate executor가 미리 확보할 VU 수 |
 | `MAX_VUS` | `30000` | arrival-rate executor가 확장할 수 있는 최대 VU 수 |
+| `SINGLE_WRITER_PARTITION_COUNT` | `8` | app 컨테이너의 courseId partition 수 |
+| `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | app 컨테이너의 partition별 queue capacity |
 
 ### 피크 타임 Capacity Planning 테스트
 
@@ -302,7 +315,7 @@ docker compose --profile load-prometheus run --rm k6-prometheus
 | `baseline_system_failure_rate` | `< 0.005` |
 | `http_req_duration p(99)` | `< 5000ms` |
 
-### Baseline / Optimistic Lock 비교 테스트
+### Baseline / Optimistic Lock / Single Writer 비교 테스트
 
 기존 baseline endpoint는 그대로 유지한다.
 
@@ -316,7 +329,13 @@ Optimistic Lock 실험 endpoint는 별도로 분리한다.
 POST /api/optimistic/enrollments
 ```
 
-k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 두 endpoint를 비교한다.
+Single Writer 실험 endpoint도 별도로 분리한다.
+
+```text
+POST /api/single-writer/enrollments
+```
+
+k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 세 endpoint를 비교한다.
 
 ```bash
 PGPASSWORD=password psql -h localhost -U user -d enrollment \
@@ -330,9 +349,25 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
 
 API_MODE=optimistic SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
 Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 body의 `reason`은 발생한 예외 타입에 따라 `ObjectOptimisticLockingFailureException` 또는 `OptimisticLockException`이 된다.
+
+Single Writer는 enqueue 성공 시 202 Accepted를 반환한다. worker 처리 결과는 즉시 API 응답으로 전달하지 않고 Prometheus metric과 로그로 관측한다.
+
+Endpoint mapping:
+
+| API_MODE | endpoint |
+| --- | --- |
+| `baseline` | `/api/baseline/enrollments` |
+| `optimistic` | `/api/optimistic/enrollments` |
+| `single-writer` | `/api/single-writer/enrollments` |
 
 ## 수집 지표
 
@@ -347,6 +382,20 @@ Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 
 | `hikaricp_connections_pending` | connection 대기 thread |
 | `hikaricp_connections_timeout_total` | connection timeout |
 | `jvm_memory_used_bytes` | JVM memory 사용량 |
+
+### Single Writer / Actuator
+
+| 지표 | 의미 |
+| --- | --- |
+| `single_writer_enqueued_count_total` | queue enqueue 성공 수 |
+| `single_writer_rejected_count_total` | queue capacity 초과로 거절된 수 |
+| `single_writer_processed_count_total` | worker DB 처리 성공 수 |
+| `single_writer_failed_count_total` | worker DB 처리 실패 수 |
+| `single_writer_queue_depth` | 전체 partition queue depth 합계 |
+| `single_writer_partition_queue_depth{partition="n"}` | partition별 queue depth |
+| `single_writer_processing_latency_seconds` | worker가 command 하나를 DB 처리하는 시간 |
+| `single_writer_end_to_end_latency_seconds` | enqueue부터 worker 처리 완료까지 걸린 시간 |
+| `single_writer_domain_failure_count_total{reason="..."}` | worker 도메인 실패 또는 queue full 사유별 count |
 
 ### PostgreSQL / postgres-exporter
 
@@ -369,6 +418,8 @@ Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 
 | `baseline_critical_mismatch_total` | 반드시 0이어야 하는 critical mismatch 수 |
 | `baseline_scenario_requests_total` | scenario_type별 요청 수 |
 | `baseline_status_<scenario>_<status>_total` | scenario_type + HTTP status별 응답 수 |
+| `baseline_accepted_total` | 접수 성공 수. single-writer에서는 202 count |
+| `baseline_queue_full_total` | single-writer 429 count |
 
 ## Grafana Dashboard
 

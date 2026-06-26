@@ -25,7 +25,7 @@ const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(PRE_ALLOCATED_VUS, REQUESTED_VU
 const SAMPLE_LIMIT = 20;
 
 const SCENARIOS = ['NORMAL', 'HOTSPOT', 'PREREQUISITE_FAIL', 'TIME_CONFLICT', 'CAPACITY_OVER', 'DUPLICATE'];
-const STATUS_BUCKETS = ['200', '400', '409', '500'];
+const STATUS_BUCKETS = ['200', '202', '400', '409', '429', '500'];
 const REQUIRED_COLUMNS = ['student_id', 'course_id', 'scenario_type', 'expected_status', 'scheduled_offset_ms'];
 
 const strictExpectedStatusMismatch = new Counter('baseline_strict_expected_status_mismatch_total');
@@ -33,6 +33,8 @@ const criticalMismatch = new Counter('baseline_critical_mismatch_total');
 const scenarioRequests = new Counter('baseline_scenario_requests_total');
 const systemFailureRate = new Rate('baseline_system_failure_rate');
 const systemFailureCount = new Counter('baseline_system_failure_total');
+const acceptedCount = new Counter('baseline_accepted_total');
+const queueFullCount = new Counter('baseline_queue_full_total');
 const mismatchSampleMetric = new Counter('baseline_mismatch_sample_total');
 const payloadStructureInvalid = new Counter('baseline_payload_structure_invalid_total');
 
@@ -148,6 +150,8 @@ function runEnrollment(row) {
   const actualStatus = response.status || 0;
   const statusBucket = toStatusBucket(actualStatus);
   const reason = extractReason(response);
+  const accepted = isAccepted(actualStatus);
+  const queueFull = isQueueFull(actualStatus);
   const strictMismatch = isStrictMismatch(row.expected_status, actualStatus);
   const systemFailure = Boolean(response.error) || actualStatus === 0 || actualStatus >= 500;
   const critical = isCriticalMismatch(row.expected_status, actualStatus, systemFailure);
@@ -156,6 +160,14 @@ function runEnrollment(row) {
   addScenarioStatus(row.scenario_type, statusBucket);
   addReason(reason, row.scenario_type);
   systemFailureRate.add(systemFailure, { scenario_type: row.scenario_type });
+
+  if (accepted) {
+    acceptedCount.add(1, { scenario_type: row.scenario_type });
+  }
+
+  if (queueFull) {
+    queueFullCount.add(1, { scenario_type: row.scenario_type });
+  }
 
   if (strictMismatch) {
     strictExpectedStatusMismatch.add(1, {
@@ -251,6 +263,7 @@ function createReasonCounters() {
     PrerequisiteNotMetException: new Counter('baseline_reason_prerequisite_not_met_total'),
     ObjectOptimisticLockingFailureException: new Counter('baseline_reason_object_optimistic_locking_failure_total'),
     OptimisticLockException: new Counter('baseline_reason_optimistic_lock_total'),
+    QueueFullException: new Counter('baseline_reason_queue_full_total'),
     Unknown: new Counter('baseline_reason_unknown_total'),
   };
 }
@@ -449,8 +462,16 @@ function toStatusBucket(actualStatus) {
     return '200';
   }
 
+  if (actualStatus === 202) {
+    return '202';
+  }
+
   if (actualStatus === 409) {
     return '409';
+  }
+
+  if (actualStatus === 429) {
+    return '429';
   }
 
   if (actualStatus >= 500 || actualStatus === 0) {
@@ -464,7 +485,23 @@ function toStatusBucket(actualStatus) {
   return '500';
 }
 
+function isAccepted(actualStatus) {
+  if (API_MODE === 'single-writer') {
+    return actualStatus === 202;
+  }
+
+  return actualStatus === 200;
+}
+
+function isQueueFull(actualStatus) {
+  return API_MODE === 'single-writer' && actualStatus === 429;
+}
+
 function isStrictMismatch(expectedStatus, actualStatus) {
+  if (API_MODE === 'single-writer') {
+    return actualStatus !== 202 && actualStatus !== 429;
+  }
+
   if (expectedStatus === '200') {
     return actualStatus !== 200;
   }
@@ -479,6 +516,10 @@ function isStrictMismatch(expectedStatus, actualStatus) {
 function isCriticalMismatch(expectedStatus, actualStatus, systemFailure) {
   if (systemFailure) {
     return true;
+  }
+
+  if (API_MODE === 'single-writer') {
+    return false;
   }
 
   if (expectedStatus === '400' && actualStatus === 200) {
@@ -496,6 +537,8 @@ function textSummary(data) {
   const critical = metrics.baseline_critical_mismatch_total?.values || {};
   const systemFailure = metrics.baseline_system_failure_rate?.values || {};
   const systemFailureTotal = metrics.baseline_system_failure_total?.values || {};
+  const accepted = metrics.baseline_accepted_total?.values || {};
+  const queueFull = metrics.baseline_queue_full_total?.values || {};
   const droppedIterations = metrics.dropped_iterations?.values || {};
 
   return [
@@ -515,6 +558,8 @@ function textSummary(data) {
     `- requests: ${requests.count ?? 0}`,
     `- dropped iterations: ${droppedIterations.count ?? 0}`,
     `- request rate: ${formatNumber(requests.rate)} req/s`,
+    `- accepted count: ${accepted.count ?? 0}`,
+    `- queue full count: ${queueFull.count ?? 0}`,
     `- strict mismatch count: ${strictMismatch.count ?? 0}`,
     `- critical mismatch count: ${critical.count ?? 0}`,
     `- system failure rate: ${formatNumber((systemFailure.rate ?? 0) * 100)}%`,
@@ -549,7 +594,7 @@ function formatArrivalPlan() {
 }
 
 function validateApiMode() {
-  const supportedModes = ['baseline', 'optimistic'];
+  const supportedModes = ['baseline', 'optimistic', 'single-writer'];
   if (!supportedModes.includes(API_MODE) && !__ENV.BASE_PATH) {
     throw new Error(`Unsupported API_MODE=${API_MODE}. Supported modes: ${supportedModes.join(', ')}`);
   }
@@ -558,6 +603,9 @@ function validateApiMode() {
 function pathForApiMode(mode) {
   if (mode === 'optimistic') {
     return '/api/optimistic/enrollments';
+  }
+  if (mode === 'single-writer') {
+    return '/api/single-writer/enrollments';
   }
   return '/api/baseline/enrollments';
 }
@@ -585,6 +633,7 @@ function formatReasonCounts(metrics) {
     `- PrerequisiteNotMetException: ${metricCount(metrics, 'baseline_reason_prerequisite_not_met_total')}`,
     `- ObjectOptimisticLockingFailureException: ${metricCount(metrics, 'baseline_reason_object_optimistic_locking_failure_total')}`,
     `- OptimisticLockException: ${metricCount(metrics, 'baseline_reason_optimistic_lock_total')}`,
+    `- QueueFullException: ${metricCount(metrics, 'baseline_reason_queue_full_total')}`,
     `- Unknown: ${metricCount(metrics, 'baseline_reason_unknown_total')}`,
   ].join('\n');
 }
@@ -664,6 +713,7 @@ function extractReason(response) {
       'PrerequisiteNotMetException',
       'ObjectOptimisticLockingFailureException',
       'OptimisticLockException',
+      'QueueFullException',
     ];
     for (const reason of known) {
       if (body.includes(reason)) {

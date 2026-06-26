@@ -2,7 +2,7 @@
 
 동기식 RDB 락 기반 수강신청 API Baseline 프로젝트.
 
-이 프로젝트는 `tmp/sugang`의 기존 구현에서 Baseline에 필요한 JPA 엔티티/Repository만 가져와 별도 프로젝트로 정리한 버전이다. Redis, MQ, 비동기 큐, JWT 인증은 의도적으로 제외했다.
+이 프로젝트는 `tmp/sugang`의 기존 구현에서 Baseline에 필요한 JPA 엔티티/Repository만 가져와 별도 프로젝트로 정리한 버전이다. Redis, MQ, JWT 인증은 의도적으로 제외했다.
 
 ## 목표
 
@@ -16,7 +16,7 @@ Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을
 
 ```text
 k6
-→ Spring Boot /api/baseline/enrollments 또는 /api/optimistic/enrollments
+→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments
 → JPA @Transactional
 → PostgreSQL PESSIMISTIC_WRITE 또는 OPTIMISTIC lock
 ```
@@ -27,8 +27,10 @@ k6
 | --- | --- |
 | `src/main/java/badapodo/sugang/service/BaselineEnrollmentService.java` | 동기식 RDB Baseline 수강신청 로직 |
 | `src/main/java/badapodo/sugang/service/OptimisticEnrollmentService.java` | 낙관적 락 기반 수강신청 실험 로직 |
+| `src/main/java/badapodo/sugang/service/singlewriter/SingleWriterEnrollmentQueueService.java` | courseId partition 기반 Single Writer Queue 실험 로직 |
 | `src/main/java/badapodo/sugang/controller/BaselineEnrollmentController.java` | 인증 없는 Baseline API |
 | `src/main/java/badapodo/sugang/controller/OptimisticEnrollmentController.java` | 인증 없는 Optimistic Lock 실험 API |
+| `src/main/java/badapodo/sugang/controller/SingleWriterEnrollmentController.java` | 인증 없는 Single Writer Queue 실험 API |
 | `infra/postgres/schema.sql` | 테이블, FK, unique constraint, index 생성 |
 | `infra/postgres/load.sql` | Mock CSV COPY 적재 |
 | `infra/postgres/reset.sql` | 반복 테스트용 enrollment/current_count 초기화 |
@@ -99,6 +101,16 @@ API_MODE=optimistic SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true 
 docker compose --profile load run --rm k6
 ```
 
+Single Writer endpoint 스모크 테스트:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+```
+
 같은 payload/조건으로 Baseline과 Optimistic 비교:
 
 ```bash
@@ -112,6 +124,28 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
   -f infra/postgres/reset.sql
 
 API_MODE=optimistic SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+같은 payload/조건으로 Baseline, Optimistic, Single Writer 비교:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=baseline SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=optimistic SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
@@ -151,13 +185,28 @@ PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
-피크 타임 Capacity Planning 테스트(baseline):$
+피크 타임 Capacity Planning 테스트(baseline):
 
 ```bash
 PGPASSWORD=password psql -h localhost -U user -d enrollment \
   -f infra/postgres/reset.sql
 
 EXECUTOR_MODE=peak-arrival-rate \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+피크 타임 Capacity Planning 테스트(single-writer):
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=single-writer \
 SCENARIO_FILTER=ALL \
 PEAK_RATE=4800 PEAK_DURATION=10s \
 TAIL_RATE=1600 TAIL_DURATION=20s \
@@ -214,6 +263,53 @@ Content-Type: application/json
   "courseId": 20
 }
 ```
+
+Single Writer Queue 실험:
+
+```http
+POST /api/single-writer/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+접수 성공:
+
+```http
+202 Accepted
+```
+
+```json
+{
+  "status": "ACCEPTED",
+  "commandId": "uuid",
+  "partitionIndex": 4
+}
+```
+
+Queue capacity 초과:
+
+```http
+429 Too Many Requests
+```
+
+```json
+{
+  "status": "FAIL",
+  "reason": "QueueFullException",
+  "message": "수강신청 요청이 일시적으로 많아 접수하지 못했습니다."
+}
+```
+
+Single Writer 설정값:
+
+| 환경변수 | 기본값 | 설명 |
+| --- | ---: | --- |
+| `SINGLE_WRITER_PARTITION_COUNT` | `8` | courseId hash 기반 partition 수 |
+| `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | partition별 queue capacity |
 
 성공:
 
