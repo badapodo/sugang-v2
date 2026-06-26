@@ -1,8 +1,10 @@
 package badapodo.sugang.exception;
 
 import badapodo.sugang.response.ErrorResponse;
+import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -32,6 +34,20 @@ public class GlobalExceptionHandler {
                 .status("FAIL")
                 .reason("INVALID_REQUEST")
                 .message("요청 값이 올바르지 않습니다.")
+                .build();
+    }
+
+    @ExceptionHandler({
+            ObjectOptimisticLockingFailureException.class,
+            OptimisticLockException.class
+    })
+    public ErrorResponse optimisticLockException(HttpServletResponse response, RuntimeException e) {
+        response.setStatus(HttpStatus.CONFLICT.value());
+
+        return ErrorResponse.builder()
+                .status("FAIL")
+                .reason(e.getClass().getSimpleName())
+                .message("낙관적 락 충돌이 발생했습니다.")
                 .build();
     }
 }

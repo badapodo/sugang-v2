@@ -5,6 +5,8 @@ import { Counter, Rate } from 'k6/metrics';
 import exec from 'k6/execution';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
+const API_MODE = (__ENV.API_MODE || 'baseline').trim().toLowerCase();
+const BASE_PATH = normalizeBasePath(__ENV.BASE_PATH || pathForApiMode(API_MODE));
 const PAYLOAD_PATH = __ENV.PAYLOAD_PATH || '../mock/sugang-mock/output/csv/enrollment_payload.csv';
 const MAX_DURATION = __ENV.MAX_DURATION || '45s';
 const SCENARIO_FILTER = (__ENV.SCENARIO_FILTER || '').trim();
@@ -56,6 +58,7 @@ const PAYLOAD_METADATA = payloadMetadata[0];
 const PAYLOAD_SCENARIO_DISTRIBUTION = PAYLOAD_METADATA.scenario_distribution;
 const PAYLOAD_EXPECTED_STATUS_DISTRIBUTION = PAYLOAD_METADATA.expected_status_distribution;
 validateLoadedPayloadDistribution(PAYLOAD_SCENARIO_DISTRIBUTION, PAYLOAD_EXPECTED_STATUS_DISTRIBUTION, PAYLOAD_METADATA.row_count);
+validateApiMode();
 
 const EFFECTIVE_ITERATIONS = REQUESTED_ITERATIONS || payloads.length;
 const EFFECTIVE_VUS = Math.max(1, Math.min(REQUESTED_VUS, EFFECTIVE_ITERATIONS));
@@ -125,7 +128,7 @@ function runEnrollment(row) {
   }
 
   const response = http.post(
-    `${BASE_URL}/api/baseline/enrollments`,
+    `${BASE_URL}${BASE_PATH}`,
     JSON.stringify({
       studentId: Number(row.student_id),
       courseId: Number(row.course_id),
@@ -246,6 +249,8 @@ function createReasonCounters() {
     TimeConflictException: new Counter('baseline_reason_time_conflict_total'),
     AlreadyCompletedCourseException: new Counter('baseline_reason_already_completed_total'),
     PrerequisiteNotMetException: new Counter('baseline_reason_prerequisite_not_met_total'),
+    ObjectOptimisticLockingFailureException: new Counter('baseline_reason_object_optimistic_locking_failure_total'),
+    OptimisticLockException: new Counter('baseline_reason_optimistic_lock_total'),
     Unknown: new Counter('baseline_reason_unknown_total'),
   };
 }
@@ -496,6 +501,8 @@ function textSummary(data) {
   return [
     '',
     'Baseline enrollment load test summary',
+    `- api mode: ${API_MODE}`,
+    `- base path: ${BASE_PATH}`,
     `- executor mode: ${EXECUTOR_MODE}`,
     `- scenario filter: ${SCENARIO_FILTER || 'ALL'}`,
     `- payload limit: ${LIMIT || 'ALL'}`,
@@ -541,6 +548,28 @@ function formatArrivalPlan() {
   return `${PEAK_RATE}/s for ${PEAK_DURATION} (${PEAK_ITERATIONS}), then ${TAIL_RATE}/s for ${TAIL_DURATION} (${TAIL_ITERATIONS})`;
 }
 
+function validateApiMode() {
+  const supportedModes = ['baseline', 'optimistic'];
+  if (!supportedModes.includes(API_MODE) && !__ENV.BASE_PATH) {
+    throw new Error(`Unsupported API_MODE=${API_MODE}. Supported modes: ${supportedModes.join(', ')}`);
+  }
+}
+
+function pathForApiMode(mode) {
+  if (mode === 'optimistic') {
+    return '/api/optimistic/enrollments';
+  }
+  return '/api/baseline/enrollments';
+}
+
+function normalizeBasePath(value) {
+  const normalized = normalizeCell(value);
+  if (!normalized) {
+    return '/api/baseline/enrollments';
+  }
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 function formatDistribution(distribution, keys) {
   return keys
     .map((key) => `- ${key}: ${distribution[key] || 0}`)
@@ -554,6 +583,8 @@ function formatReasonCounts(metrics) {
     `- TimeConflictException: ${metricCount(metrics, 'baseline_reason_time_conflict_total')}`,
     `- AlreadyCompletedCourseException: ${metricCount(metrics, 'baseline_reason_already_completed_total')}`,
     `- PrerequisiteNotMetException: ${metricCount(metrics, 'baseline_reason_prerequisite_not_met_total')}`,
+    `- ObjectOptimisticLockingFailureException: ${metricCount(metrics, 'baseline_reason_object_optimistic_locking_failure_total')}`,
+    `- OptimisticLockException: ${metricCount(metrics, 'baseline_reason_optimistic_lock_total')}`,
     `- Unknown: ${metricCount(metrics, 'baseline_reason_unknown_total')}`,
   ].join('\n');
 }
@@ -631,6 +662,8 @@ function extractReason(response) {
       'TimeConflictException',
       'AlreadyCompletedCourseException',
       'PrerequisiteNotMetException',
+      'ObjectOptimisticLockingFailureException',
+      'OptimisticLockException',
     ];
     for (const reason of known) {
       if (body.includes(reason)) {

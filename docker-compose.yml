@@ -10,7 +10,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/enrollment
       SPRING_DATASOURCE_USERNAME: user
       SPRING_DATASOURCE_PASSWORD: password
-      HIKARI_MAXIMUM_POOL_SIZE: 16
+      HIKARI_MAXIMUM_POOL_SIZE: 32
       HIKARI_CONNECTION_TIMEOUT_MS: 8000
     cpus: "8.0"
     mem_limit: 32g
@@ -80,6 +80,8 @@ services:
       - load
     environment:
       BASE_URL: http://app:8080
+      API_MODE: ${API_MODE:-baseline}
+      BASE_PATH: ${BASE_PATH:-}
       PAYLOAD_PATH: /payload/enrollment_payload.csv
       VUS: ${VUS:-200}
       ITERATIONS: ${ITERATIONS:-}
@@ -115,6 +117,8 @@ services:
       - load-prometheus
     environment:
       BASE_URL: http://app:8080
+      API_MODE: ${API_MODE:-baseline}
+      BASE_PATH: ${BASE_PATH:-}
       PAYLOAD_PATH: /payload/enrollment_payload.csv
       VUS: ${VUS:-200}
       ITERATIONS: ${ITERATIONS:-}

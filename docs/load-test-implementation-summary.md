@@ -142,6 +142,8 @@ app container resource:
 | 변수 | 기본값 또는 compose 값 |
 | --- | --- |
 | `BASE_URL` | `http://app:8080` |
+| `API_MODE` | `${API_MODE:-baseline}` |
+| `BASE_PATH` | `${BASE_PATH:-}` |
 | `PAYLOAD_PATH` | `/payload/enrollment_payload.csv` |
 | `VUS` | `${VUS:-200}` |
 | `ITERATIONS` | `${ITERATIONS:-}` |

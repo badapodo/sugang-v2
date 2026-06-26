@@ -16,9 +16,9 @@ Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을
 
 ```text
 k6
-→ Spring Boot /api/baseline/enrollments
+→ Spring Boot /api/baseline/enrollments 또는 /api/optimistic/enrollments
 → JPA @Transactional
-→ PostgreSQL SELECT ... FOR UPDATE
+→ PostgreSQL PESSIMISTIC_WRITE 또는 OPTIMISTIC lock
 ```
 
 ## 주요 파일
@@ -26,7 +26,9 @@ k6
 | 파일 | 설명 |
 | --- | --- |
 | `src/main/java/badapodo/sugang/service/BaselineEnrollmentService.java` | 동기식 RDB Baseline 수강신청 로직 |
+| `src/main/java/badapodo/sugang/service/OptimisticEnrollmentService.java` | 낙관적 락 기반 수강신청 실험 로직 |
 | `src/main/java/badapodo/sugang/controller/BaselineEnrollmentController.java` | 인증 없는 Baseline API |
+| `src/main/java/badapodo/sugang/controller/OptimisticEnrollmentController.java` | 인증 없는 Optimistic Lock 실험 API |
 | `infra/postgres/schema.sql` | 테이블, FK, unique constraint, index 생성 |
 | `infra/postgres/load.sql` | Mock CSV COPY 적재 |
 | `infra/postgres/reset.sql` | 반복 테스트용 enrollment/current_count 초기화 |
@@ -85,6 +87,32 @@ NORMAL 100건 스모크 테스트:
 ```bash
 SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
 docker compose --profile load run --rm k6
+```
+
+Optimistic Lock endpoint 스모크 테스트:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=optimistic SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+```
+
+같은 payload/조건으로 Baseline과 Optimistic 비교:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=baseline SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=optimistic SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
 Prometheus remote-write smoke test:
@@ -148,8 +176,22 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/re
 
 ## API
 
+Baseline:
+
 ```http
 POST /api/baseline/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+Optimistic Lock 실험:
+
+```http
+POST /api/optimistic/enrollments
 Content-Type: application/json
 
 {

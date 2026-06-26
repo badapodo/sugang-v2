@@ -259,6 +259,8 @@ response_body
 | 환경변수 | 예시 | 설명 |
 | --- | --- | --- |
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
+| `API_MODE` | `baseline` | `baseline`이면 `/api/baseline/enrollments`, `optimistic`이면 `/api/optimistic/enrollments` 호출 |
+| `BASE_PATH` | `/api/optimistic/enrollments` | `API_MODE` 대신 직접 호출 path를 지정할 때 사용 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
 | `ITERATIONS` | `1000` | payload는 전체 로드하되 실행 iteration 수만 제한 |
@@ -299,6 +301,38 @@ docker compose --profile load-prometheus run --rm k6-prometheus
 | `baseline_critical_mismatch_total` | 0 |
 | `baseline_system_failure_rate` | `< 0.005` |
 | `http_req_duration p(99)` | `< 5000ms` |
+
+### Baseline / Optimistic Lock 비교 테스트
+
+기존 baseline endpoint는 그대로 유지한다.
+
+```text
+POST /api/baseline/enrollments
+```
+
+Optimistic Lock 실험 endpoint는 별도로 분리한다.
+
+```text
+POST /api/optimistic/enrollments
+```
+
+k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 두 endpoint를 비교한다.
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=baseline SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+API_MODE=optimistic SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 body의 `reason`은 발생한 예외 타입에 따라 `ObjectOptimisticLockingFailureException` 또는 `OptimisticLockException`이 된다.
 
 ## 수집 지표
 
