@@ -18,6 +18,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Set;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -35,9 +39,17 @@ public class GlobalInMemorySingleWriterEnrollmentService {
     private final Counter rejectedCounter;
     private final Counter processedCounter;
     private final Counter failedCounter;
+    private final Counter successCounter;
+    private final Counter timeoutCounter;
+    private final Counter duplicateCommandProcessedCounter;
+    private final Counter duplicateSuccessPairCounter;
     private final MeterRegistry meterRegistry;
     private final Timer matchLatencyTimer;
-    private final Timer responseLatencyTimer;
+    private final Timer responseWaitLatencyTimer;
+    private final Timer commandLagTimer;
+    private final AtomicInteger inflightRequests = new AtomicInteger();
+    private final Set<String> processedCommandIds = ConcurrentHashMap.newKeySet();
+    private final Map<String, String> successfulPairCommandIds = new ConcurrentHashMap<>();
     private ExecutorService writerExecutor;
 
     public GlobalInMemorySingleWriterEnrollmentService(
@@ -59,13 +71,31 @@ public class GlobalInMemorySingleWriterEnrollmentService {
         this.responseTimeoutMs = responseTimeoutMs;
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
         this.meterRegistry = meterRegistry;
-        this.enqueuedCounter = Counter.builder("global_single_writer.enqueued.count").register(meterRegistry);
-        this.rejectedCounter = Counter.builder("global_single_writer.rejected.count").register(meterRegistry);
-        this.processedCounter = Counter.builder("global_single_writer.processed.count").register(meterRegistry);
-        this.failedCounter = Counter.builder("global_single_writer.failed.count").register(meterRegistry);
-        this.matchLatencyTimer = Timer.builder("global_single_writer.match.latency").register(meterRegistry);
-        this.responseLatencyTimer = Timer.builder("global_single_writer.response.latency").register(meterRegistry);
-        Gauge.builder("global_single_writer.queue.depth", queue, BlockingQueue::size).register(meterRegistry);
+        this.enqueuedCounter = Counter.builder("global_single_writer_enqueued").register(meterRegistry);
+        this.rejectedCounter = Counter.builder("global_single_writer_rejected").register(meterRegistry);
+        this.processedCounter = Counter.builder("global_single_writer_processed").register(meterRegistry);
+        this.failedCounter = Counter.builder("global_single_writer_failed").register(meterRegistry);
+        this.successCounter = Counter.builder("global_single_writer_success").register(meterRegistry);
+        this.timeoutCounter = Counter.builder("global_single_writer_timeout").register(meterRegistry);
+        this.duplicateCommandProcessedCounter = Counter.builder("global_single_writer_duplicate_command_processed")
+                .register(meterRegistry);
+        this.duplicateSuccessPairCounter = Counter.builder("global_single_writer_duplicate_success_pair")
+                .register(meterRegistry);
+        this.matchLatencyTimer = histogramTimer("global_single_writer_match_latency", meterRegistry);
+        this.responseWaitLatencyTimer = histogramTimer(
+                "global_single_writer_response_wait_latency",
+                meterRegistry
+        );
+        this.commandLagTimer = histogramTimer("global_single_writer_command_lag", meterRegistry);
+        Gauge.builder("global_single_writer_queue_depth", queue, BlockingQueue::size).register(meterRegistry);
+        Gauge.builder("global_single_writer_inflight_requests", inflightRequests, AtomicInteger::get)
+                .register(meterRegistry);
+        Gauge.builder(
+                        "global_single_writer_write_behind_enqueue_gap",
+                        successCounter,
+                        counter -> counter.count() - writeBehindService.enqueuedCount()
+                )
+                .register(meterRegistry);
     }
 
     @PostConstruct
@@ -100,15 +130,17 @@ public class GlobalInMemorySingleWriterEnrollmentService {
         Instant responseStartedAt = Instant.now();
         if (!queue.offer(command)) {
             rejectedCounter.increment();
-            responseLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
+            responseWaitLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
             return GlobalInMemoryEnrollmentResponse.queueFull(command.getCommandId());
         }
         enqueuedCounter.increment();
+        inflightRequests.incrementAndGet();
 
         try {
             InMemoryEnrollmentResult result = command.getResponseFuture().get(responseTimeoutMs, TimeUnit.MILLISECONDS);
             return GlobalInMemoryEnrollmentResponse.completed(command.getCommandId(), result);
         } catch (TimeoutException e) {
+            timeoutCounter.increment();
             return GlobalInMemoryEnrollmentResponse.timeout(command.getCommandId());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -122,7 +154,8 @@ public class GlobalInMemorySingleWriterEnrollmentService {
                     InMemoryEnrollmentResult.failure(new IllegalStateException("응답 대기 중 오류가 발생했습니다.", e))
             );
         } finally {
-            responseLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
+            inflightRequests.decrementAndGet();
+            responseWaitLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
         }
     }
 
@@ -142,20 +175,62 @@ public class GlobalInMemorySingleWriterEnrollmentService {
 
     private void process(GlobalInMemoryEnrollmentCommand command) {
         Instant matchStartedAt = Instant.now();
+        commandLagTimer.record(Duration.between(command.getEnqueuedAt(), matchStartedAt));
+        if (!processedCommandIds.add(command.getCommandId())) {
+            duplicateCommandProcessedCounter.increment();
+            failedCounter.increment();
+            log.error(
+                    "Global writer duplicate command processing blocked. commandId={}, studentId={}, courseId={}, scenarioType={}",
+                    command.getCommandId(),
+                    command.getStudentId(),
+                    command.getCourseId(),
+                    command.getScenarioType()
+            );
+            command.complete(InMemoryEnrollmentResult.failure(
+                    new IllegalStateException("동일한 command가 두 번 처리되었습니다.")
+            ));
+            return;
+        }
+
+        boolean alreadyExistsInMemoryBeforeSuccess = stateStore.isEnrolled(
+                command.getStudentId(),
+                command.getCourseId()
+        );
         try {
             stateStore.validateAndEnroll(command.getStudentId(), command.getCourseId());
+            String pairKey = command.getStudentId() + ":" + command.getCourseId();
+            String previousCommandId = successfulPairCommandIds.putIfAbsent(pairKey, command.getCommandId());
+            if (previousCommandId != null) {
+                duplicateSuccessPairCounter.increment();
+                log.error(
+                        "Global writer duplicate successful pair detected. commandId={}, previousCommandId={}, "
+                                + "studentId={}, courseId={}, scenarioType={}, alreadyExistsInMemoryBeforeSuccess={}",
+                        command.getCommandId(),
+                        previousCommandId,
+                        command.getStudentId(),
+                        command.getCourseId(),
+                        command.getScenarioType(),
+                        alreadyExistsInMemoryBeforeSuccess
+                );
+            }
             writeBehindService.enqueue(GlobalInMemoryWriteBehindEvent.of(
                     command.getCommandId(),
                     command.getStudentId(),
                     command.getCourseId(),
+                    command.getScenarioType(),
+                    "SUCCESS",
+                    alreadyExistsInMemoryBeforeSuccess,
+                    1,
+                    matchStartedAt,
                     Instant.now()
             ));
             processedCounter.increment();
+            successCounter.increment();
             command.complete(InMemoryEnrollmentResult.success());
         } catch (ApplicationException e) {
             processedCounter.increment();
             failedCounter.increment();
-            Counter.builder("global_single_writer.domain_failure.count")
+            Counter.builder("global_single_writer_domain_failure")
                     .tag("reason", e.getClass().getSimpleName())
                     .register(meterRegistry)
                     .increment();
@@ -173,5 +248,11 @@ public class GlobalInMemorySingleWriterEnrollmentService {
         } finally {
             matchLatencyTimer.record(Duration.between(matchStartedAt, Instant.now()));
         }
+    }
+
+    private Timer histogramTimer(String name, MeterRegistry registry) {
+        return Timer.builder(name)
+                .publishPercentileHistogram()
+                .register(registry);
     }
 }

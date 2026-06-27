@@ -57,7 +57,7 @@ docker compose up --build
 PGPASSWORD=password psql -h localhost -U user -d enrollment -f infra/postgres/reset.sql
 ```
 
-`infra/postgres/reset.sql`은 `enrollment`를 truncate하고 `course.current_count`, `course.version`을 0으로 갱신한다.
+`infra/postgres/reset.sql`은 `enrollment`를 truncate한 뒤 mock seed enrollment를 다시 적재하고, seed 집계에 맞춰 `course.current_count`를 복원하며 `course.version`을 0으로 갱신한다. seed 상태는 `TIME_CONFLICT`, `DUPLICATE`, `CAPACITY_OVER`를 다른 payload의 선행 성공과 독립적으로 재현하기 위한 데이터다.
 
 ### k6 profile
 
@@ -289,7 +289,7 @@ custom metric:
 - `baseline_critical_mismatch_total`
 - `baseline_mismatch_sample_total`
 
-strict mismatch가 발생하면 최대 20개 sample을 수집한다. sample 필드는 `request_id`, `scenario_type`, `expected_status`, `actual_status`, `student_id`, `course_id`, `response_body`이다.
+strict mismatch가 발생하면 최대 20개 sample을 수집한다. sample에는 요청 정보와 함께 `error_code`, `error`, `error_message`, `response_body`가 포함된다.
 
 ### system failure 정의
 
@@ -303,6 +303,11 @@ custom metric:
 
 - `baseline_system_failure_rate`
 - `baseline_system_failure_total`
+- `baseline_status_zero_total`
+- `baseline_real_5xx_total`
+- `baseline_k6_error_total`
+
+summary에서는 status 0과 실제 5xx를 분리하고, `(error_code, error, error_message)` 조합별 발생 횟수와 status 0 sample 최대 20개를 출력한다.
 
 threshold:
 
@@ -314,10 +319,13 @@ threshold:
 
 status bucket:
 
+- `0`
 - `200`
+- `202`
 - `400`
 - `409`
-- `500`
+- `429`
+- `5xx`
 
 metric 이름:
 
@@ -345,6 +353,10 @@ baseline_status_<scenario>_<status>_total
 - strict mismatch count
 - critical mismatch count
 - system failure rate/count
+- status 0 count
+- real 5xx count
+- k6 error reason count
+- status 0 sample
 - latency p95/p99
 - payload scenario distribution
 - payload expected_status distribution
@@ -534,12 +546,13 @@ compose command:
 | `HikariCP active/pending` | `hikaricp_connections_active`, `hikaricp_connections_pending`, `hikaricp_connections_max` |
 | `PostgreSQL connections` | `sum(pg_stat_activity_count{job="postgres-exporter"}) by (state)` |
 | `PostgreSQL lock wait / deadlock` | `sum(pg_stat_activity_wait_count{job="postgres-exporter", datname="enrollment", wait_event_type="Lock"}) or vector(0)`, `sum(rate(pg_stat_database_deadlocks{job="postgres-exporter"}[1m]))` |
+| `Global In-Memory Single Writer` 섹션 | writer throughput/queue/latency, HTTP wait/inflight, write-behind queue/성공/실패/duplicate/latency, domain/system failure, JVM heap/GC |
+
+21개 전체 패널의 현재 PromQL과 해석 기준은 `docs/grafana-metrics-guide.md`에 정리되어 있다.
 
 ### 미구현 또는 TODO
 
 - Grafana dashboard에는 k6 Prometheus remote-write metric(`k6_http_reqs_total`, `k6_http_req_duration_p95`, `k6_http_req_duration_p99`) 패널이 있지만, 기본 `k6` profile은 remote-write를 사용하지 않는다. 이 metric은 `load-prometheus` profile로 `k6-prometheus`를 실행해야 Prometheus에 들어간다.
-- 별도 Micrometer custom metric을 Spring 애플리케이션 코드에서 직접 등록하는 구현은 없다. 현재 Spring 쪽은 Actuator/Micrometer 자동 계측과 HikariCP metric에 의존한다.
-- dashboard에 JVM memory 패널은 없다. docs에는 `jvm_memory_used_bytes`가 수집 지표로 언급되어 있지만 dashboard JSON 패널 목록에는 없다.
 
 ## 6. PostgreSQL / HikariCP / Micrometer 관련 설정
 

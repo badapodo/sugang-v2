@@ -11,5 +11,10 @@ public class GlobalInMemoryWriteBehindEvent {
     private final String commandId;
     private final Long studentId;
     private final Long courseId;
+    private final String scenarioType;
+    private final String writerResult;
+    private final boolean alreadyExistsInMemoryBeforeSuccess;
+    private final int attemptNo;
     private final Instant matchedAt;
+    private final Instant writeBehindEnqueuedAt;
 }

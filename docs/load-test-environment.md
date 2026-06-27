@@ -472,6 +472,12 @@ Endpoint mapping:
 
 ## Grafana Dashboard
 
+현재 dashboard의 전체 패널별 지표 의미와 병목 판정 방법은 다음 문서에 정리되어 있다.
+
+```text
+docs/grafana-metrics-guide.md
+```
+
 자동 provisioning 대상:
 
 ```text
@@ -496,6 +502,8 @@ Sugang Baseline Load Test
 | HikariCP active/pending | connection pool 포화 여부 확인 |
 | PostgreSQL connections | DB session 상태 확인 |
 | PostgreSQL lock wait / deadlock | row lock 경합과 deadlock 발생 여부 확인 |
+
+위 표는 공통 패널 요약이다. Global Writer, write-behind, JVM 패널을 포함한 전체 목록은 `docs/grafana-metrics-guide.md`를 기준으로 한다.
 
 `postgres-exporter` 기본 `pg_stat_activity_count` metric에는 `wait_event_type` 라벨이 없다. 따라서 lock wait 세션 수는 custom query로 추가한 `pg_stat_activity_wait_count`를 사용한다.
 

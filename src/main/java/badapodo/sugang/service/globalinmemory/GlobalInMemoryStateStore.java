@@ -17,6 +17,8 @@ import badapodo.sugang.repository.EnrollmentRepository;
 import badapodo.sugang.repository.PrerequisiteRepository;
 import badapodo.sugang.repository.StudentRepository;
 import badapodo.sugang.service.inmemory.InMemoryCourseTime;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,6 +45,7 @@ public class GlobalInMemoryStateStore {
     private final PrerequisiteRepository prerequisiteRepository;
     private final CourseTimeRepository courseTimeRepository;
     private final StudentRepository studentRepository;
+    private final MeterRegistry meterRegistry;
 
     // After startup, these mutable structures are owned exclusively by the global writer thread.
     private final Map<Long, GlobalCourseState> courseStates = new HashMap<>();
@@ -51,6 +55,10 @@ public class GlobalInMemoryStateStore {
     private final Map<Long, List<InMemoryCourseTime>> courseTimesByCourseId = new HashMap<>();
     private final Map<Long, Set<Long>> enrolledCourseIdsByStudentId = new HashMap<>();
     private final Map<Long, List<InMemoryCourseTime>> studentTimetables = new HashMap<>();
+    private final AtomicInteger loadedSeedEnrollmentCount = new AtomicInteger();
+    private final AtomicInteger loadedInMemoryEnrollmentCount = new AtomicInteger();
+    private final AtomicInteger loadedCourseStateCount = new AtomicInteger();
+    private final AtomicInteger loadedStudentTimetableCount = new AtomicInteger();
 
     @PostConstruct
     @Transactional(readOnly = true)
@@ -75,13 +83,34 @@ public class GlobalInMemoryStateStore {
             courseStates.put(course.getId(), new GlobalCourseState(course.getCapacity(), currentCount));
         }
 
+        int inMemoryEnrollmentCount = enrolledCourseIdsByStudentId.values().stream()
+                .mapToInt(Set::size)
+                .sum();
+        int timetableEntryCount = studentTimetables.values().stream()
+                .mapToInt(List::size)
+                .sum();
+        loadedSeedEnrollmentCount.set(enrollments.size());
+        loadedInMemoryEnrollmentCount.set(inMemoryEnrollmentCount);
+        loadedCourseStateCount.set(courseStates.size());
+        loadedStudentTimetableCount.set(timetableEntryCount);
+        registerStartupGauges();
+
         log.info(
-                "Loaded global in-memory single-writer state. courses={}, students={}, enrolledStudents={}, timetables={}",
+                "Global in-memory startup consistency. loadedSeedEnrollmentCount={}, "
+                        + "loadedInMemoryEnrollmentCount={}, enrollmentCountMatch={}, loadedCourseStateCount={}, "
+                        + "loadedStudentTimetableCount={}, studentsWithEnrollment={}, studentsWithTimetable={}",
+                enrollments.size(),
+                inMemoryEnrollmentCount,
+                enrollments.size() == inMemoryEnrollmentCount,
                 courseStates.size(),
-                studentDepartmentIds.size(),
+                timetableEntryCount,
                 enrolledCourseIdsByStudentId.size(),
                 studentTimetables.size()
         );
+    }
+
+    public boolean isEnrolled(Long studentId, Long courseId) {
+        return enrolledCourseIdsByStudentId.getOrDefault(studentId, Collections.emptySet()).contains(courseId);
     }
 
     public void validateAndEnroll(Long studentId, Long courseId) {
@@ -202,5 +231,18 @@ public class GlobalInMemoryStateStore {
 
     private String prerequisiteKey(Long courseId, Long departmentId) {
         return courseId + ":" + departmentId;
+    }
+
+    private void registerStartupGauges() {
+        registerGauge("global_single_writer_loaded_seed_enrollments", loadedSeedEnrollmentCount);
+        registerGauge("global_single_writer_loaded_in_memory_enrollments", loadedInMemoryEnrollmentCount);
+        registerGauge("global_single_writer_loaded_course_states", loadedCourseStateCount);
+        registerGauge("global_single_writer_loaded_student_timetables", loadedStudentTimetableCount);
+    }
+
+    private void registerGauge(String name, AtomicInteger value) {
+        if (meterRegistry.find(name).gauge() == null) {
+            Gauge.builder(name, value, AtomicInteger::get).register(meterRegistry);
+        }
     }
 }

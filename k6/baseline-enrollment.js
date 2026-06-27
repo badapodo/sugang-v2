@@ -25,7 +25,7 @@ const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(PRE_ALLOCATED_VUS, REQUESTED_VU
 const SAMPLE_LIMIT = 20;
 
 const SCENARIOS = ['NORMAL', 'HOTSPOT', 'PREREQUISITE_FAIL', 'TIME_CONFLICT', 'CAPACITY_OVER', 'DUPLICATE'];
-const STATUS_BUCKETS = ['200', '202', '400', '409', '429', '500'];
+const STATUS_BUCKETS = ['0', '200', '202', '400', '409', '429', '5xx'];
 const REQUIRED_COLUMNS = ['student_id', 'course_id', 'scenario_type', 'expected_status', 'scheduled_offset_ms'];
 
 const strictExpectedStatusMismatch = new Counter('baseline_strict_expected_status_mismatch_total');
@@ -33,6 +33,9 @@ const criticalMismatch = new Counter('baseline_critical_mismatch_total');
 const scenarioRequests = new Counter('baseline_scenario_requests_total');
 const systemFailureRate = new Rate('baseline_system_failure_rate');
 const systemFailureCount = new Counter('baseline_system_failure_total');
+const statusZeroCount = new Counter('baseline_status_zero_total');
+const realFiveXxCount = new Counter('baseline_real_5xx_total');
+const k6ErrorCount = new Counter('baseline_k6_error_total');
 const acceptedCount = new Counter('baseline_accepted_total');
 const queueFullCount = new Counter('baseline_queue_full_total');
 const mismatchSampleMetric = new Counter('baseline_mismatch_sample_total');
@@ -41,6 +44,7 @@ const payloadStructureInvalid = new Counter('baseline_payload_structure_invalid_
 const statusCounters = createScenarioStatusCounters();
 const reasonCounters = createReasonCounters();
 const responseSamples = [];
+const statusZeroSamples = [];
 
 const payloads = new SharedArray('enrollment payloads', () => {
   return loadPayloadRows();
@@ -91,11 +95,11 @@ export default function () {
 }
 
 export function peakArrival() {
-  runArrivalIteration(0);
+  runArrivalIteration(0, PEAK_ITERATIONS);
 }
 
 export function tailArrival() {
-  runArrivalIteration(PEAK_ITERATIONS);
+  runArrivalIteration(PEAK_ITERATIONS, TAIL_ITERATIONS);
 }
 
 function runSharedIteration() {
@@ -108,13 +112,20 @@ function runSharedIteration() {
   runEnrollment(row);
 }
 
-function runArrivalIteration(offset) {
+function runArrivalIteration(offset, plannedIterations) {
   if (payloads.length === 0) {
     fail(`No payload rows loaded from ${PAYLOAD_PATH}. SCENARIO_FILTER=${SCENARIO_FILTER || '-'}`);
   }
 
-  const iterationIndex = offset + exec.scenario.iterationInTest;
-  const row = payloads[iterationIndex % payloads.length];
+  const scenarioIteration = exec.scenario.iterationInTest;
+  // constant-arrival-rate can schedule one boundary iteration beyond the
+  // mathematical rate * duration count. Do not wrap and replay payload rows.
+  if (scenarioIteration >= plannedIterations) {
+    return;
+  }
+
+  const iterationIndex = offset + scenarioIteration;
+  const row = payloads[iterationIndex];
   runEnrollment(row);
 }
 
@@ -150,6 +161,7 @@ function runEnrollment(row) {
   const actualStatus = response.status || 0;
   const statusBucket = toStatusBucket(actualStatus);
   const reason = extractReason(response);
+  const k6Error = extractK6Error(response);
   const accepted = isAccepted(actualStatus);
   const queueFull = isQueueFull(actualStatus);
   const strictMismatch = isStrictMismatch(row.expected_status, actualStatus);
@@ -160,6 +172,26 @@ function runEnrollment(row) {
   addScenarioStatus(row.scenario_type, statusBucket);
   addReason(reason, row.scenario_type);
   systemFailureRate.add(systemFailure, { scenario_type: row.scenario_type });
+
+  if (actualStatus === 0) {
+    statusZeroCount.add(1, { scenario_type: row.scenario_type });
+    addStatusZeroSample(row, response, k6Error);
+  }
+
+  if (actualStatus >= 500) {
+    realFiveXxCount.add(1, {
+      scenario_type: row.scenario_type,
+      status: String(actualStatus),
+    });
+  }
+
+  if (actualStatus === 0 || response.error) {
+    k6ErrorCount.add(1, {
+      scenario_type: row.scenario_type,
+      error_code: k6Error.error_code || 'none',
+    });
+    addK6ErrorReason(response, k6Error);
+  }
 
   if (accepted) {
     acceptedCount.add(1, { scenario_type: row.scenario_type });
@@ -461,6 +493,10 @@ function normalizeMetricPart(value) {
 }
 
 function toStatusBucket(actualStatus) {
+  if (actualStatus === 0) {
+    return '0';
+  }
+
   if (actualStatus === 200) {
     return '200';
   }
@@ -477,15 +513,15 @@ function toStatusBucket(actualStatus) {
     return '429';
   }
 
-  if (actualStatus >= 500 || actualStatus === 0) {
-    return '500';
+  if (actualStatus >= 500) {
+    return '5xx';
   }
 
   if (actualStatus >= 400 && actualStatus < 500) {
     return '400';
   }
 
-  return '500';
+  return '5xx';
 }
 
 function isAccepted(actualStatus) {
@@ -545,6 +581,9 @@ function textSummary(data) {
   const critical = metrics.baseline_critical_mismatch_total?.values || {};
   const systemFailure = metrics.baseline_system_failure_rate?.values || {};
   const systemFailureTotal = metrics.baseline_system_failure_total?.values || {};
+  const statusZero = metrics.baseline_status_zero_total?.values || {};
+  const realFiveXx = metrics.baseline_real_5xx_total?.values || {};
+  const k6Errors = metrics.baseline_k6_error_total?.values || {};
   const accepted = metrics.baseline_accepted_total?.values || {};
   const queueFull = metrics.baseline_queue_full_total?.values || {};
   const droppedIterations = metrics.dropped_iterations?.values || {};
@@ -572,6 +611,9 @@ function textSummary(data) {
     `- critical mismatch count: ${critical.count ?? 0}`,
     `- system failure rate: ${formatNumber((systemFailure.rate ?? 0) * 100)}%`,
     `- system failure count: ${systemFailureTotal.count ?? 0}`,
+    `- status 0 count: ${statusZero.count ?? 0}`,
+    `- real 5xx count: ${realFiveXx.count ?? 0}`,
+    `- k6 error count: ${k6Errors.count ?? 0}`,
     `- latency p95: ${formatNumber(duration['p(95)'])} ms`,
     `- latency p99: ${formatNumber(duration['p(99)'])} ms`,
     '',
@@ -586,6 +628,12 @@ function textSummary(data) {
     '',
     'Response body reason count',
     formatReasonCounts(metrics),
+    '',
+    'k6 error reason count',
+    formatK6ErrorReasonCounts(data),
+    '',
+    'Status 0 samples',
+    formatStatusZeroSamples(data),
     '',
     'Mismatch samples',
     formatMismatchSamples(data),
@@ -678,6 +726,7 @@ function addMismatchSample(row, response) {
     student_id: row.student_id,
     course_id: row.course_id,
     response_body: sanitizeBody(response.body),
+    ...extractK6Error(response),
   };
 
   responseSamples.push(sample);
@@ -689,6 +738,7 @@ function addMismatchSample(row, response) {
     student_id: String(sample.student_id),
     course_id: String(sample.course_id),
     response_body: encodeURIComponent(sample.response_body.slice(0, 200)),
+    error_code: String(sample.error_code || ''),
   });
 
   check(response, {
@@ -710,6 +760,9 @@ function sampleCheckName(sample) {
     student_id: sample.student_id,
     course_id: sample.course_id,
     response_body: sample.response_body.slice(0, 300),
+    error_code: sample.error_code,
+    error: sample.error,
+    error_message: sample.error_message,
   }))}`;
 }
 
@@ -720,6 +773,55 @@ function sanitizeBody(body) {
 
   const normalized = String(body).replace(/\s+/g, ' ').trim();
   return normalized.length > 500 ? `${normalized.slice(0, 500)}...` : normalized;
+}
+
+function extractK6Error(response) {
+  return {
+    error_code: normalizeErrorField(response?.error_code),
+    error: normalizeErrorField(response?.error),
+    error_message: normalizeErrorField(response?.error_message || response?.error),
+  };
+}
+
+function normalizeErrorField(value) {
+  if (value === undefined || value === null || value === '') {
+    return '';
+  }
+  return sanitizeBody(String(value));
+}
+
+function addK6ErrorReason(response, k6Error) {
+  const signature = {
+    error_code: k6Error.error_code || '-',
+    error: k6Error.error || '-',
+    error_message: k6Error.error_message || '-',
+  };
+  check(response, {
+    [`k6_error_reason|${encodeURIComponent(JSON.stringify(signature))}`]: () => false,
+  });
+}
+
+function addStatusZeroSample(row, response, k6Error) {
+  const sample = {
+    request_id: row.request_id,
+    scenario_type: row.scenario_type,
+    expected_status: row.expected_status,
+    actual_status: 0,
+    student_id: row.student_id,
+    course_id: row.course_id,
+    error_code: k6Error.error_code,
+    error: k6Error.error,
+    error_message: k6Error.error_message,
+  };
+
+  if (statusZeroSamples.length < SAMPLE_LIMIT) {
+    statusZeroSamples.push(sample);
+  }
+
+  check(response, {
+    [`status_zero_sample|${encodeURIComponent(JSON.stringify(sample))}`]: () => false,
+  });
+  console.error(`STATUS_ZERO_SAMPLE ${JSON.stringify(sample)}`);
 }
 
 function extractReason(response) {
@@ -766,6 +868,75 @@ function formatScenarioStatusCounts(metrics) {
     .join('\n');
 }
 
+function formatK6ErrorReasonCounts(data) {
+  const reasons = checksWithPrefix(data, 'k6_error_reason|')
+    .map((item) => ({
+      signature: decodeCheckPayload(item.name, 'k6_error_reason|'),
+      count: item.fails ?? 0,
+    }))
+    .filter((item) => item.signature)
+    .sort((left, right) => right.count - left.count);
+
+  if (reasons.length === 0) {
+    return '- no k6 errors';
+  }
+
+  return reasons
+    .map((item) => [
+      `- count: ${item.count}`,
+      `  error_code: ${item.signature.error_code || '-'}`,
+      `  error: ${item.signature.error || '-'}`,
+      `  error_message: ${item.signature.error_message || '-'}`,
+    ].join('\n'))
+    .join('\n');
+}
+
+function formatStatusZeroSamples(data) {
+  const aggregatedSamples = checksWithPrefix(data, 'status_zero_sample|')
+    .slice(0, SAMPLE_LIMIT)
+    .map((item) => decodeCheckPayload(item.name, 'status_zero_sample|'))
+    .filter(Boolean);
+  const samples = aggregatedSamples.length > 0
+    ? aggregatedSamples
+    : statusZeroSamples.slice(0, SAMPLE_LIMIT);
+
+  if (samples.length === 0) {
+    return '- no status 0 samples';
+  }
+
+  return samples
+    .map((sample, index) => formatStatusZeroSample(sample, index))
+    .join('\n');
+}
+
+function formatStatusZeroSample(sample, index) {
+  return [
+    `Sample ${index + 1}`,
+    `  request_id: ${sample.request_id}`,
+    `  scenario_type: ${sample.scenario_type}`,
+    `  expected_status: ${sample.expected_status}`,
+    '  actual_status: 0',
+    `  student_id: ${sample.student_id}`,
+    `  course_id: ${sample.course_id}`,
+    `  error_code: ${sample.error_code || '-'}`,
+    `  error: ${sample.error || '-'}`,
+    `  error_message: ${sample.error_message || '-'}`,
+  ].join('\n');
+}
+
+function checksWithPrefix(data, prefix) {
+  return (data.root_group?.checks || [])
+    .filter((item) => item.name && item.name.startsWith(prefix));
+}
+
+function decodeCheckPayload(name, prefix) {
+  try {
+    return JSON.parse(decodeURIComponent(name.slice(prefix.length)));
+  } catch (error) {
+    return null;
+  }
+}
+
 function metricCount(metrics, metricName) {
   return metrics[metricName]?.values?.count ?? 0;
 }
@@ -795,6 +966,9 @@ function formatSample(sample, index) {
     `  actual_status: ${sample.actual_status}`,
     `  student_id: ${sample.student_id}`,
     `  course_id: ${sample.course_id}`,
+    `  error_code: ${sample.error_code || '-'}`,
+    `  error: ${sample.error || '-'}`,
+    `  error_message: ${sample.error_message || '-'}`,
     `  response_body: ${sample.response_body || '-'}`,
   ].join('\n');
 }

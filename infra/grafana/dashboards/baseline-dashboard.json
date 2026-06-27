@@ -261,6 +261,465 @@
       ],
       "title": "PostgreSQL lock wait / deadlock",
       "type": "timeseries"
+    },
+    {
+      "id": 7,
+      "title": "Global In-Memory Single Writer",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "title": "Global Writer throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(global_single_writer_enqueued_total[1m]))",
+          "legendFormat": "enqueued/sec"
+        },
+        {
+          "expr": "sum(rate(global_single_writer_processed_total[1m]))",
+          "legendFormat": "processed/sec"
+        },
+        {
+          "expr": "sum(rate(global_single_writer_success_total[1m]))",
+          "legendFormat": "success/sec"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Global Writer queue depth",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "global_single_writer_queue_depth",
+          "legendFormat": "commands"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Global Writer match latency p95/p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_match_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_match_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "HTTP response wait latency p95/p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_response_wait_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_response_wait_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "In-flight HTTP waiting requests",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "global_single_writer_inflight_requests",
+          "legendFormat": "waiting"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Write-behind queue depth",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "global_single_writer_write_behind_queue_depth",
+          "legendFormat": "events"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Write-behind success/failure rate",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(global_single_writer_write_behind_success_total[1m]))",
+          "legendFormat": "success/sec"
+        },
+        {
+          "expr": "sum by (reason) (rate(global_single_writer_write_behind_failed_total[1m]))",
+          "legendFormat": "failed {{reason}}/sec"
+        },
+        {
+          "expr": "sum(rate(global_single_writer_write_behind_processed_total[1m]))",
+          "legendFormat": "processed/sec"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Write-behind duplicate insert count",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "global_single_writer_write_behind_duplicate_total",
+          "legendFormat": "duplicates"
+        },
+        {
+          "expr": "global_single_writer_write_behind_duplicate_command_enqueue_total",
+          "legendFormat": "duplicate command enqueue"
+        },
+        {
+          "expr": "global_single_writer_write_behind_duplicate_command_processed_total",
+          "legendFormat": "duplicate command processed"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Write-behind latency p95/p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_write_behind_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "DB p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_write_behind_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "DB p99"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_write_behind_lag_seconds_bucket[1m])) by (le))",
+          "legendFormat": "queue lag p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_write_behind_lag_seconds_bucket[1m])) by (le))",
+          "legendFormat": "queue lag p99"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Domain failure count by reason",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (global_single_writer_domain_failure_total)",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Global API system failure / 5xx",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{uri=\"/api/global-in-memory-single-writer/enrollments\",status=~\"5..\"}[1m]))",
+          "legendFormat": "Spring 5xx/sec"
+        },
+        {
+          "expr": "sum(rate(k6_baseline_system_failure_total[1m])) or vector(0)",
+          "legendFormat": "k6 status 0/5xx/sec"
+        },
+        {
+          "expr": "sum(rate(global_single_writer_timeout_total[1m]))",
+          "legendFormat": "writer timeout/sec"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Writer success / write-behind enqueue consistency",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "global_single_writer_success_total",
+          "legendFormat": "writer success"
+        },
+        {
+          "expr": "global_single_writer_write_behind_enqueued_total",
+          "legendFormat": "write-behind enqueued"
+        },
+        {
+          "expr": "global_single_writer_write_behind_enqueue_gap",
+          "legendFormat": "gap"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "JVM heap memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})",
+          "legendFormat": "used"
+        },
+        {
+          "expr": "sum(jvm_memory_max_bytes{area=\"heap\"})",
+          "legendFormat": "max"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "JVM GC pause",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(jvm_gc_pause_seconds_sum[1m]))",
+          "legendFormat": "pause seconds/sec"
+        },
+        {
+          "expr": "sum(rate(jvm_gc_pause_seconds_count[1m]))",
+          "legendFormat": "collections/sec"
+        }
+      ]
     }
   ],
   "refresh": "5s",
@@ -281,6 +740,6 @@
   "timezone": "browser",
   "title": "Sugang Baseline Load Test",
   "uid": "sugang-baseline-load-test",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
