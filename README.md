@@ -16,7 +16,7 @@ Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을
 
 ```text
 k6
-→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments, /api/single-writer-sync/enrollments, /api/in-memory-single-writer/enrollments
+→ Spring Boot enrollment APIs (baseline, optimistic, partition single-writer, global in-memory single-writer)
 → JPA @Transactional
 → PostgreSQL PESSIMISTIC_WRITE 또는 OPTIMISTIC lock
 ```
@@ -286,6 +286,23 @@ PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
+피크 타임 Capacity Planning 테스트(global-in-memory-single-writer):
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose up --build -d app
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=global-in-memory-single-writer \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
 이 테스트는 80,000건 중 48,000건을 첫 10초에, 32,000건을 이후 20초에 주입한다. `dropped_iterations=0`, `baseline_critical_mismatch_total=0`, `baseline_system_failure_rate<0.005`, `p99<5000ms`를 기준으로 본다.
 
 `grafana/k6:0.54.0`에서 200 VU 전체 burst가 k6 런타임 내부 crash를 일으키는 환경이면 다음 순서로 확인한다.
@@ -425,6 +442,35 @@ Content-Type: application/json
 - `course.current_count`는 write-behind에서 갱신하지 않고 `enrollment` insert만 수행한다. 재시작 시 기존 `enrollment`와 `course.current_count`를 함께 읽어 메모리 상태를 재구성한다.
 - DB write-behind 실패는 HTTP 성공 응답 이후 발생할 수 있으므로 `in_memory_single_writer.write_behind.failed.count`를 반드시 확인해야 한다.
 
+Global In-Memory Single Writer 실험:
+
+```http
+POST /api/global-in-memory-single-writer/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+동작 방식:
+
+- 모든 command를 하나의 bounded queue에 넣고 단 하나의 global writer가 FIFO로 처리한다.
+- writer만 course remaining capacity, student enrollment set, student timetable을 검증하고 수정한다.
+- 검증 순서는 선수과목, 중복 신청, 시간표 충돌, 정원 초과 순서다.
+- HTTP thread는 future를 기다리고 최종 결과를 `200`, `400`, `409`로 받는다. queue full은 `429`, timeout은 `504`다.
+- 성공 이벤트만 write-behind queue로 전달되며, DB insert는 설정된 worker pool에서 비동기로 처리한다.
+- course partition 간 학생 상태 race가 없으므로 `in-memory-single-writer`와 student time conflict 정합성을 비교할 수 있다.
+
+운영상 한계:
+
+- WAL/Event Log가 없으므로 HTTP `200` 이후 DB 저장 전에 프로세스가 종료되면 성공 이벤트가 유실될 수 있다.
+- DB insert 실패는 이미 반환된 HTTP 성공과 메모리 상태를 롤백하지 않는다. `global_single_writer.write_behind.failed.count`를 반드시 관측해야 한다.
+- 메모리 상태는 한 app 인스턴스에만 존재하므로 다중 인스턴스에서 global ordering을 보장하지 않는다.
+- 응답 timeout 이후에도 queue에 들어간 command는 writer가 나중에 처리할 수 있다.
+- 단일 writer의 처리량이 전체 matching 처리량 상한이며, write-behind worker 수를 늘려도 메모리 판정은 병렬화되지 않는다.
+
 Single Writer 설정값:
 
 | 환경변수 | 기본값 | 설명 |
@@ -436,6 +482,9 @@ Single Writer 설정값:
 | `IN_MEMORY_SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | in-memory partition별 queue capacity |
 | `IN_MEMORY_SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | in-memory API thread가 worker 결과를 기다리는 최대 시간 |
 | `IN_MEMORY_SINGLE_WRITER_WRITE_BEHIND_QUEUE_CAPACITY` | `100000` | 성공 이벤트 DB insert 대기열 capacity |
+| `GLOBAL_SINGLE_WRITER_QUEUE_CAPACITY` | `100000` | global command queue와 write-behind queue의 capacity |
+| `GLOBAL_SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | global writer 결과를 기다리는 최대 시간 |
+| `GLOBAL_SINGLE_WRITER_WRITE_BEHIND_WORKER_COUNT` | `4` | 비동기 DB insert worker 수 |
 
 성공:
 
