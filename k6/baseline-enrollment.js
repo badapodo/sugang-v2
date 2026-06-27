@@ -265,6 +265,7 @@ function createReasonCounters() {
     OptimisticLockException: new Counter('baseline_reason_optimistic_lock_total'),
     QueueFullException: new Counter('baseline_reason_queue_full_total'),
     SingleWriterResponseTimeoutException: new Counter('baseline_reason_single_writer_response_timeout_total'),
+    InMemorySingleWriterResponseTimeoutException: new Counter('baseline_reason_in_memory_single_writer_response_timeout_total'),
     Unknown: new Counter('baseline_reason_unknown_total'),
   };
 }
@@ -495,7 +496,7 @@ function isAccepted(actualStatus) {
 }
 
 function isQueueFull(actualStatus) {
-  return (API_MODE === 'single-writer' || API_MODE === 'single-writer-sync') && actualStatus === 429;
+  return ['single-writer', 'single-writer-sync', 'in-memory-single-writer'].includes(API_MODE) && actualStatus === 429;
 }
 
 function isStrictMismatch(expectedStatus, actualStatus) {
@@ -595,7 +596,7 @@ function formatArrivalPlan() {
 }
 
 function validateApiMode() {
-  const supportedModes = ['baseline', 'optimistic', 'single-writer', 'single-writer-sync'];
+  const supportedModes = ['baseline', 'optimistic', 'single-writer', 'single-writer-sync', 'in-memory-single-writer'];
   if (!supportedModes.includes(API_MODE) && !__ENV.BASE_PATH) {
     throw new Error(`Unsupported API_MODE=${API_MODE}. Supported modes: ${supportedModes.join(', ')}`);
   }
@@ -610,6 +611,9 @@ function pathForApiMode(mode) {
   }
   if (mode === 'single-writer-sync') {
     return '/api/single-writer-sync/enrollments';
+  }
+  if (mode === 'in-memory-single-writer') {
+    return '/api/in-memory-single-writer/enrollments';
   }
   return '/api/baseline/enrollments';
 }
@@ -639,6 +643,7 @@ function formatReasonCounts(metrics) {
     `- OptimisticLockException: ${metricCount(metrics, 'baseline_reason_optimistic_lock_total')}`,
     `- QueueFullException: ${metricCount(metrics, 'baseline_reason_queue_full_total')}`,
     `- SingleWriterResponseTimeoutException: ${metricCount(metrics, 'baseline_reason_single_writer_response_timeout_total')}`,
+    `- InMemorySingleWriterResponseTimeoutException: ${metricCount(metrics, 'baseline_reason_in_memory_single_writer_response_timeout_total')}`,
     `- Unknown: ${metricCount(metrics, 'baseline_reason_unknown_total')}`,
   ].join('\n');
 }
@@ -720,6 +725,7 @@ function extractReason(response) {
       'OptimisticLockException',
       'QueueFullException',
       'SingleWriterResponseTimeoutException',
+      'InMemorySingleWriterResponseTimeoutException',
     ];
     for (const reason of known) {
       if (body.includes(reason)) {

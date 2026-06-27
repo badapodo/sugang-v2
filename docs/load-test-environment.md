@@ -4,7 +4,7 @@
 
 이 단계의 목적은 Spring Boot + PostgreSQL 기반 수강신청 API에 k6 부하를 주입하고, 병목 지표를 관측할 수 있는 환경을 구축하는 것이다.
 
-중요한 점은 성능 개선이 아니라 측정 가능성이다. Baseline의 병목을 캐시나 외부 MQ로 숨기지 않고, 동기식 RDB 구조의 한계를 먼저 관찰한다. 이후 비교 실험군으로 Optimistic Lock, Single Writer Queue, Single Writer Sync를 같은 payload로 실행한다.
+중요한 점은 성능 개선이 아니라 측정 가능성이다. Baseline의 병목을 캐시나 외부 MQ로 숨기지 않고, 동기식 RDB 구조의 한계를 먼저 관찰한다. 이후 비교 실험군으로 Optimistic Lock, Single Writer Queue, Single Writer Sync, In-Memory Single Writer를 같은 payload로 실행한다.
 
 ## 구성
 
@@ -22,7 +22,7 @@ Docker Compose 서비스:
 
 | 서비스 | 역할 |
 | --- | --- |
-| `app` | Baseline, Optimistic, Single Writer, Single Writer Sync 수강신청 API |
+| `app` | Baseline, Optimistic, Single Writer, Single Writer Sync, In-Memory Single Writer 수강신청 API |
 | `postgres` | 수강신청 DB |
 | `postgres-exporter` | PostgreSQL 지표 수집 |
 | `prometheus` | Spring/PostgreSQL/k6 지표 저장 |
@@ -45,6 +45,8 @@ Single Writer 실험은 외부 MQ 없이 애플리케이션 내부 `BlockingQueu
 `/api/single-writer/enrollments`는 enqueue 직후 202를 반환하는 접수형 API다.
 
 `/api/single-writer-sync/enrollments`는 같은 queue/worker 구조를 사용하지만 API thread가 worker 결과를 기다리는 동기 응답형 API다. 거래소 Matching Engine처럼 같은 key의 command를 single writer가 순차 처리하되, client는 처리 결과를 즉시 응답으로 받는 실험군이다.
+
+`/api/in-memory-single-writer/enrollments`는 DB transaction을 HTTP 결과 판정 경로에서 제거한다. courseId partition worker가 메모리 `CourseState`를 수정해 최종 결과를 만들고, 성공 이벤트는 write-behind queue로 DB에 비동기 insert한다.
 
 ## 사전 준비
 
@@ -233,7 +235,7 @@ CSV 컬럼:
 | `429` | queue capacity 초과 |
 | `5xx/status 0` | 시스템 실패 |
 
-`API_MODE=single-writer-sync`에서는 baseline/optimistic과 같은 기준을 사용한다. 즉 정상 수강신청은 `200`, 도메인 실패는 `400` 또는 `409`, queue full은 `429`, 응답 대기 timeout은 `504`다.
+`API_MODE=single-writer-sync`와 `API_MODE=in-memory-single-writer`에서는 baseline/optimistic과 같은 기준을 사용한다. 즉 정상 수강신청은 `200`, 도메인 실패는 `400` 또는 `409`, queue full은 `429`, 응답 대기 timeout은 `504`다.
 
 도메인 실패 payload는 4xx로 방어되면 성공으로 본다. 5xx는 Baseline API 또는 DB 병목이 사용자 오류를 넘어 서버 실패로 전이된 신호다.
 
@@ -276,7 +278,7 @@ response_body
 | 환경변수 | 예시 | 설명 |
 | --- | --- | --- |
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
-| `API_MODE` | `baseline` | `baseline`, `optimistic`, `single-writer` endpoint 선택 |
+| `API_MODE` | `baseline` | `baseline`, `optimistic`, `single-writer`, `single-writer-sync`, `in-memory-single-writer` endpoint 선택 |
 | `BASE_PATH` | `/api/optimistic/enrollments` | `API_MODE` 대신 직접 호출 path를 지정할 때 사용 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |
@@ -294,6 +296,10 @@ response_body
 | `SINGLE_WRITER_PARTITION_COUNT` | `8` | app 컨테이너의 courseId partition 수 |
 | `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | app 컨테이너의 partition별 queue capacity |
 | `SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | single-writer-sync API thread가 worker 결과를 기다리는 최대 시간 |
+| `IN_MEMORY_SINGLE_WRITER_PARTITION_COUNT` | `8` | in-memory courseId partition 수 |
+| `IN_MEMORY_SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | in-memory partition별 queue capacity |
+| `IN_MEMORY_SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | in-memory API thread가 worker 결과를 기다리는 최대 시간 |
+| `IN_MEMORY_SINGLE_WRITER_WRITE_BEHIND_QUEUE_CAPACITY` | `100000` | write-behind DB insert queue capacity |
 
 ### 피크 타임 Capacity Planning 테스트
 
@@ -341,6 +347,7 @@ Single Writer 실험 endpoint도 별도로 분리한다.
 ```text
 POST /api/single-writer/enrollments
 POST /api/single-writer-sync/enrollments
+POST /api/in-memory-single-writer/enrollments
 ```
 
 k6는 같은 payload를 사용하고 `API_MODE`만 바꿔 endpoint를 비교한다.
@@ -369,6 +376,14 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
 
 API_MODE=single-writer-sync SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose up --build -d app
+
+API_MODE=in-memory-single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
 Optimistic Lock 충돌은 재시도 없이 409 Conflict로 응답한다. 응답 body의 `reason`은 발생한 예외 타입에 따라 `ObjectOptimisticLockingFailureException` 또는 `OptimisticLockException`이 된다.
@@ -385,6 +400,7 @@ Endpoint mapping:
 | `optimistic` | `/api/optimistic/enrollments` |
 | `single-writer` | `/api/single-writer/enrollments` |
 | `single-writer-sync` | `/api/single-writer-sync/enrollments` |
+| `in-memory-single-writer` | `/api/in-memory-single-writer/enrollments` |
 
 ## 수집 지표
 
@@ -415,6 +431,20 @@ Endpoint mapping:
 | `single_writer_domain_failure_count_total{reason="..."}` | worker 도메인 실패 또는 queue full 사유별 count |
 | `single_writer_sync_timeout_count_total` | single-writer-sync 응답 대기 timeout 수 |
 | `single_writer_sync_response_wait_latency_seconds` | API thread가 worker 결과를 기다린 시간 |
+
+### In-Memory Single Writer / Actuator
+
+| 지표 | 의미 |
+| --- | --- |
+| `in_memory_single_writer_enqueued_count_total` | matching queue enqueue 성공 수 |
+| `in_memory_single_writer_processed_count_total` | partition worker 처리 수 |
+| `in_memory_single_writer_rejected_count_total` | matching queue capacity 초과 수 |
+| `in_memory_single_writer_queue_depth` | 전체 matching queue depth |
+| `in_memory_single_writer_match_latency_seconds` | worker가 메모리 CourseState를 검증/수정하는 시간 |
+| `in_memory_single_writer_response_latency_seconds` | HTTP thread가 worker 결과를 기다린 시간 |
+| `in_memory_single_writer_write_behind_enqueued_count_total` | DB write-behind enqueue 성공 수 |
+| `in_memory_single_writer_write_behind_success_count_total` | DB insert 성공 수 |
+| `in_memory_single_writer_write_behind_failed_count_total` | DB insert 실패 수 |
 
 ### PostgreSQL / postgres-exporter
 

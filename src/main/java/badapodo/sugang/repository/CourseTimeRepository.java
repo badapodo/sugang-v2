@@ -11,4 +11,7 @@ public interface CourseTimeRepository extends JpaRepository<CourseTime, Long> {
     @Query("SELECT ct FROM CourseTime ct WHERE ct.course.id = :courseId")
     List<CourseTime> findAllByCourseId(@Param("courseId") Long courseId);
     List<CourseTime> findByCourseIdIn(List<Long> courseIds);
+
+    @Query("select ct from CourseTime ct join fetch ct.course")
+    List<CourseTime> findAllWithCourse();
 }

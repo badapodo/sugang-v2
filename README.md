@@ -16,7 +16,7 @@ Mock Data Harness가 만든 8만 건 수강신청 payload를 사용해 다음을
 
 ```text
 k6
-→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments, /api/single-writer-sync/enrollments
+→ Spring Boot /api/baseline/enrollments, /api/optimistic/enrollments, /api/single-writer/enrollments, /api/single-writer-sync/enrollments, /api/in-memory-single-writer/enrollments
 → JPA @Transactional
 → PostgreSQL PESSIMISTIC_WRITE 또는 OPTIMISTIC lock
 ```
@@ -28,10 +28,13 @@ k6
 | `src/main/java/badapodo/sugang/service/BaselineEnrollmentService.java` | 동기식 RDB Baseline 수강신청 로직 |
 | `src/main/java/badapodo/sugang/service/OptimisticEnrollmentService.java` | 낙관적 락 기반 수강신청 실험 로직 |
 | `src/main/java/badapodo/sugang/service/singlewriter/SingleWriterEnrollmentQueueService.java` | courseId partition 기반 Single Writer Queue 실험 로직 |
+| `src/main/java/badapodo/sugang/service/inmemory/InMemorySingleWriterEnrollmentService.java` | 메모리 CourseState 기반 Single Writer 실험 로직 |
+| `src/main/java/badapodo/sugang/service/inmemory/InMemoryEnrollmentWriteBehindService.java` | In-Memory Single Writer 성공 이벤트 비동기 DB insert |
 | `src/main/java/badapodo/sugang/controller/BaselineEnrollmentController.java` | 인증 없는 Baseline API |
 | `src/main/java/badapodo/sugang/controller/OptimisticEnrollmentController.java` | 인증 없는 Optimistic Lock 실험 API |
 | `src/main/java/badapodo/sugang/controller/SingleWriterEnrollmentController.java` | 인증 없는 Single Writer Queue 실험 API |
 | `src/main/java/badapodo/sugang/controller/SingleWriterSyncEnrollmentController.java` | worker 처리 결과를 기다리는 동기 응답형 Single Writer API |
+| `src/main/java/badapodo/sugang/controller/InMemorySingleWriterEnrollmentController.java` | 메모리 상태를 즉시 갱신하고 최종 결과를 반환하는 Single Writer API |
 | `infra/postgres/schema.sql` | 테이블, FK, unique constraint, index 생성 |
 | `infra/postgres/load.sql` | Mock CSV COPY 적재 |
 | `infra/postgres/reset.sql` | 반복 테스트용 enrollment/current_count 초기화 |
@@ -122,6 +125,18 @@ API_MODE=single-writer-sync SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDU
 docker compose --profile load run --rm k6
 ```
 
+In-Memory Single Writer endpoint 스모크 테스트:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose up --build -d app
+
+API_MODE=in-memory-single-writer SCENARIO_FILTER=NORMAL LIMIT=100 VUS=1 IGNORE_SCHEDULE=true MAX_DURATION=30s \
+docker compose --profile load run --rm k6
+```
+
 같은 payload/조건으로 Baseline과 Optimistic 비교:
 
 ```bash
@@ -163,6 +178,14 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
   -f infra/postgres/reset.sql
 
 API_MODE=single-writer-sync SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
+docker compose --profile load-prometheus run --rm k6-prometheus
+
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose up --build -d app
+
+API_MODE=in-memory-single-writer SCENARIO_FILTER=ALL VUS=200 MAX_DURATION=90s \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
@@ -239,6 +262,23 @@ PGPASSWORD=password psql -h localhost -U user -d enrollment \
 
 EXECUTOR_MODE=peak-arrival-rate \
 API_MODE=single-writer-sync \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+피크 타임 Capacity Planning 테스트(in-memory-single-writer):
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose up --build -d app
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=in-memory-single-writer \
 SCENARIO_FILTER=ALL \
 PEAK_RATE=4800 PEAK_DURATION=10s \
 TAIL_RATE=1600 TAIL_DURATION=20s \
@@ -356,6 +396,35 @@ Content-Type: application/json
 - `SINGLE_WRITER_RESPONSE_TIMEOUT_MS`를 넘기면 `504 Gateway Timeout`을 반환한다.
 - queue capacity 초과는 `429 Too Many Requests`를 반환한다.
 
+In-Memory Single Writer 실험:
+
+```http
+POST /api/in-memory-single-writer/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+동작 방식:
+
+- 애플리케이션 시작 시 `Course`와 기존 `Enrollment`를 읽어 courseId별 `CourseState`를 메모리에 만든다.
+- `CourseState`는 `capacity`, `currentCount`, `remainingCapacity`, `enrolledStudentIds`를 가진다.
+- HTTP thread는 `CourseState`를 직접 수정하지 않고 command를 partition queue에 넣은 뒤 결과 future를 기다린다.
+- 같은 `courseId`는 항상 같은 partition worker에서 FIFO로 처리된다.
+- worker는 메모리 상태에서 선수과목, 중복 신청, 시간표 충돌, 정원 초과를 검증하고 즉시 `200`, `400`, `409` 결과를 만든다.
+- 성공 이벤트는 write-behind queue에 넣고, 별도 worker가 `Enrollment`를 비동기로 insert한다.
+
+운영상 한계:
+
+- WAL/Event Log가 없으므로 프로세스 장애 시 아직 DB에 쓰이지 않은 성공 이벤트가 유실될 수 있다.
+- 메모리 상태는 단일 app 인스턴스 안에서만 일관되며, 다중 인스턴스 확장은 지원하지 않는다.
+- 선수과목/시간표 충돌 검증은 애플리케이션 시작 시 로드한 메모리 snapshot과 실행 중 성공한 in-memory 신청 상태를 기준으로 수행한다.
+- `course.current_count`는 write-behind에서 갱신하지 않고 `enrollment` insert만 수행한다. 재시작 시 기존 `enrollment`와 `course.current_count`를 함께 읽어 메모리 상태를 재구성한다.
+- DB write-behind 실패는 HTTP 성공 응답 이후 발생할 수 있으므로 `in_memory_single_writer.write_behind.failed.count`를 반드시 확인해야 한다.
+
 Single Writer 설정값:
 
 | 환경변수 | 기본값 | 설명 |
@@ -363,6 +432,10 @@ Single Writer 설정값:
 | `SINGLE_WRITER_PARTITION_COUNT` | `8` | courseId hash 기반 partition 수 |
 | `SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | partition별 queue capacity |
 | `SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | single-writer-sync API thread가 worker 결과를 기다리는 최대 시간 |
+| `IN_MEMORY_SINGLE_WRITER_PARTITION_COUNT` | `8` | in-memory courseId hash 기반 partition 수 |
+| `IN_MEMORY_SINGLE_WRITER_QUEUE_CAPACITY_PER_PARTITION` | `10000` | in-memory partition별 queue capacity |
+| `IN_MEMORY_SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | in-memory API thread가 worker 결과를 기다리는 최대 시간 |
+| `IN_MEMORY_SINGLE_WRITER_WRITE_BEHIND_QUEUE_CAPACITY` | `100000` | 성공 이벤트 DB insert 대기열 capacity |
 
 성공:
 

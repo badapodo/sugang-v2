@@ -20,4 +20,7 @@ public interface PrerequisiteRepository extends JpaRepository<Prerequisite, Long
     List<Long> findPreCourseIdsByCourseIdAndDepartmentId(
             @Param("courseId") Long courseId,
             @Param("departmentId") Long departmentId);
+
+    @Query("select p from Prerequisite p join fetch p.course join fetch p.preCourse join fetch p.department")
+    List<Prerequisite> findAllWithRelations();
 }
