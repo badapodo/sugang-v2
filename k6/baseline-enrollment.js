@@ -79,6 +79,8 @@ validateExecutorMode();
 
 export const options = {
   scenarios: buildScenarios(),
+  noConnectionReuse: false,
+  noVUConnectionReuse: false,
   thresholds: {
     http_req_duration: ['p(95)<2000', 'p(99)<5000'],
     dropped_iterations: ['count<1'],
@@ -94,12 +96,8 @@ export default function () {
   runSharedIteration();
 }
 
-export function peakArrival() {
-  runArrivalIteration(0, PEAK_ITERATIONS);
-}
-
-export function tailArrival() {
-  runArrivalIteration(PEAK_ITERATIONS, TAIL_ITERATIONS);
+export function peakArrivalPlan() {
+  runArrivalIteration(0, ARRIVAL_ITERATIONS);
 }
 
 function runSharedIteration() {
@@ -235,22 +233,16 @@ function runEnrollment(row) {
 function buildScenarios() {
   if (IS_PEAK_ARRIVAL_RATE) {
     return {
-      peak_arrival: {
-        executor: 'constant-arrival-rate',
-        exec: 'peakArrival',
-        rate: PEAK_RATE,
+      peak_arrival_plan: {
+        executor: 'ramping-arrival-rate',
+        exec: 'peakArrivalPlan',
+        startRate: PEAK_RATE,
         timeUnit: ARRIVAL_TIME_UNIT,
-        duration: PEAK_DURATION,
-        preAllocatedVUs: PRE_ALLOCATED_VUS,
-        maxVUs: MAX_VUS,
-      },
-      tail_arrival: {
-        executor: 'constant-arrival-rate',
-        exec: 'tailArrival',
-        rate: TAIL_RATE,
-        timeUnit: ARRIVAL_TIME_UNIT,
-        duration: TAIL_DURATION,
-        startTime: PEAK_DURATION,
+        stages: [
+          { target: PEAK_RATE, duration: PEAK_DURATION },
+          { target: TAIL_RATE, duration: '1ms' },
+          { target: TAIL_RATE, duration: TAIL_DURATION },
+        ],
         preAllocatedVUs: PRE_ALLOCATED_VUS,
         maxVUs: MAX_VUS,
       },

@@ -44,9 +44,9 @@ k6
 | `docs/api-spec.md` | Baseline API 요청/응답 명세 |
 | `docs/key-code.md` | 주요 코드 흐름과 책임 정리 |
 | `docs/load-test-environment.md` | k6, Prometheus, Grafana 기반 부하 테스트 환경 |
-| `docs/grafana-metrics-guide.md` | Grafana 21개 패널의 지표 의미와 병목 판정 기준 |
+| `docs/grafana-metrics-guide.md` | Grafana 24개 패널의 지표 의미와 병목 판정 기준 |
 | `docs/postgres-slow-query-analysis.md` | 부하 테스트 중 PostgreSQL slow SQL 수집 및 EXPLAIN ANALYZE 절차 |
-| `docs/peak-traffic-capacity-test.md` | 초반 10초 60% 집중 유입을 검증하는 constant-arrival-rate 기반 피크 트래픽 테스트 |
+| `docs/peak-traffic-capacity-test.md` | 초반 10초 60% 집중 유입을 검증하는 arrival-rate 기반 피크 트래픽 테스트 |
 
 ## 실행
 

@@ -1,6 +1,6 @@
 # Peak Traffic Capacity Test
 
-이 문서는 80,000건 수강신청 요청이 30초 동안 들어오는 상황에서 초반 10초에 60%가 집중되는 피크 트래픽을 k6 `constant-arrival-rate`로 검증하는 방법을 정리한다.
+이 문서는 80,000건 수강신청 요청이 30초 동안 들어오는 상황에서 초반 10초에 60%가 집중되는 피크 트래픽을 k6 arrival-rate executor로 검증하는 방법을 정리한다.
 
 ## 목표 모델
 
@@ -24,18 +24,19 @@ Capacity Planning 기준:
 
 `k6/baseline-enrollment.js`는 기본적으로 `shared-iterations`를 사용한다.
 
-피크 트래픽 테스트는 다음 환경변수로 `constant-arrival-rate` 기반 시나리오를 사용한다.
+피크 트래픽 테스트는 다음 환경변수로 단일 `ramping-arrival-rate` 시나리오를 사용한다.
 
 ```bash
 EXECUTOR_MODE=peak-arrival-rate
 ```
 
-이 모드에서는 두 개의 k6 scenario가 실행된다.
+이 모드에서는 하나의 k6 scenario가 실행된다.
 
-| scenario | executor | exec function | rate | duration | startTime |
-| --- | --- | --- | ---: | --- | --- |
-| `peak_arrival` | `constant-arrival-rate` | `peakArrival` | `PEAK_RATE` | `PEAK_DURATION` | 즉시 |
-| `tail_arrival` | `constant-arrival-rate` | `tailArrival` | `TAIL_RATE` | `TAIL_DURATION` | `PEAK_DURATION` 이후 |
+| scenario | executor | exec function | stages |
+| --- | --- | --- | --- |
+| `peak_arrival_plan` | `ramping-arrival-rate` | `peakArrivalPlan` | `PEAK_RATE` 유지 후 `TAIL_RATE`로 전환 |
+
+피크와 후속 구간을 독립 scenario로 만들면 각 scenario가 별도 VU와 HTTP connection pool을 사용한다. 후속 구간 시작 시 두 번째 대규모 connection pool이 동시에 연결을 시도하여 Docker bridge/Tomcat ingress에서 `dial: i/o timeout`이 발생할 수 있으므로, 한 scenario가 같은 VU connection을 재사용하도록 구성했다. `noConnectionReuse=false`, `noVUConnectionReuse=false`가 명시되어 있다.
 
 `peak-arrival-rate` 모드에서는 `scheduled_offset_ms`를 사용하지 않는다. 유입 시점은 k6 arrival-rate executor가 통제한다.
 
@@ -69,7 +70,7 @@ docker compose --profile load-prometheus run --rm k6-prometheus
 
 확인할 것:
 
-- k6가 두 scenario(`peak_arrival`, `tail_arrival`)를 생성하는지
+- k6가 단일 scenario(`peak_arrival_plan`)를 생성하는지
 - `dropped iterations: 0`인지
 - Prometheus/Grafana에 k6 metric이 들어오는지
 
@@ -91,6 +92,23 @@ docker compose --profile load-prometheus run --rm k6-prometheus
 
 `PRE_ALLOCATED_VUS`와 `MAX_VUS`는 테스트 장비 성능에 맞춰 조정한다. 목표 유입률이 높은데 VU가 부족하면 k6가 요청을 시작하지 못하고 `dropped_iterations`가 증가한다.
 
+### Host k6 비교 실행
+
+Docker network 경로를 제외하려면 app은 컨테이너로 유지하고 k6만 host에서 실행한다.
+
+```bash
+BASE_URL=http://localhost:8080 \
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=global-in-memory-single-writer \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+k6 run --quiet k6/baseline-enrollment.js
+```
+
+Docker와 host 비교 시 k6 버전을 동일하게 맞춘다. `status 0`, `dropped_iterations`, p95/p99와 Tomcat Busy/Current/Max Threads를 함께 비교한다.
+
 ## 판정 기준
 
 성공 기준:
@@ -108,6 +126,7 @@ docker compose --profile load-prometheus run --rm k6-prometheus
 - `p99 >= 5000ms`: 대기열 마지노선 5초를 초과한다.
 - `baseline_system_failure_rate >= 0.005`: 5xx 또는 네트워크 실패가 허용 범위를 넘었다.
 - `baseline_critical_mismatch_total > 0`: 도메인 실패가 200으로 성공했거나 시스템 실패가 발생했다.
+- `Tomcat Busy Threads == Max Threads`: HTTP worker pool이 포화된 상태다. connection 수용 및 HTTP 대기 병목을 함께 확인한다.
 
 ## 주의사항
 

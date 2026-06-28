@@ -720,6 +720,90 @@
           "legendFormat": "collections/sec"
         }
       ]
+    },
+    {
+      "id": 22,
+      "title": "Tomcat Busy Threads",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "tomcat_threads_busy_threads{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "{{name}} busy"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Tomcat Current Threads",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "tomcat_threads_current_threads{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "{{name}} current"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Tomcat Max Threads",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "tomcat_threads_config_max_threads{job=\"sugang-v2-baseline\"}",
+          "legendFormat": "{{name}} max"
+        }
+      ]
     }
   ],
   "refresh": "5s",

@@ -317,7 +317,7 @@ PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
 docker compose --profile load-prometheus run --rm k6-prometheus
 ```
 
-`peak-arrival-rate` 모드는 k6 `constant-arrival-rate` executor를 사용한다. 이 모드에서는 `scheduled_offset_ms`를 무시하고 k6 arrival scheduler가 요청 유입 시점을 통제한다.
+`peak-arrival-rate` 모드는 단일 k6 `ramping-arrival-rate` scenario를 사용한다. 피크와 후속 구간이 같은 VU connection pool을 재사용하며, `scheduled_offset_ms`는 무시하고 k6 arrival scheduler가 요청 유입 시점을 통제한다.
 
 성공 기준:
 

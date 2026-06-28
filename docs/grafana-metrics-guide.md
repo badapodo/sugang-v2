@@ -242,6 +242,18 @@ used가 계속 증가하고 GC 후에도 내려오지 않으면 command 추적 s
 
 GC pause와 HTTP latency가 동시에 증가하면 메모리 압력 또는 과도한 객체 생성이 응답 지연에 영향을 주는지 확인한다.
 
+### 22. Tomcat Busy Threads
+
+현재 요청을 처리 중인 Tomcat worker thread 수다. Busy가 Max에 붙으면 HTTP worker pool이 포화되어 새 연결이나 요청이 connector에서 대기할 수 있다.
+
+### 23. Tomcat Current Threads
+
+Tomcat이 현재 생성한 worker thread 수다. 부하 중 Current가 증가하여 Max에 도달하는지 확인한다.
+
+### 24. Tomcat Max Threads
+
+Tomcat worker thread의 설정 상한이다. Busy와 Current의 기준선으로 사용한다. 이 지표를 노출하기 위해 `server.tomcat.mbeanregistry.enabled=true`가 설정되어 있다.
+
 ## Startup 정합성 지표
 
 Dashboard 패널에는 포함하지 않았지만 Prometheus에서 다음 값을 조회할 수 있다.
@@ -265,10 +277,11 @@ loaded_seed_enrollments == loaded_in_memory_enrollments
 
 1. `Request rate`에서 k6 요청이 Spring까지 도달했는지 확인한다.
 2. `HTTP status ratio`와 `Global API system failure / 5xx`에서 시스템 실패 여부를 확인한다.
-3. `Global Writer queue depth`, `command lag`, `processed/sec`로 writer 병목을 확인한다.
-4. `Write-behind queue depth`, queue lag, DB latency로 영속화 병목을 확인한다.
-5. HikariCP와 PostgreSQL 패널에서 DB connection/lock 원인을 확인한다.
-6. JVM heap/GC가 같은 시간대에 증가했는지 확인한다.
+3. Tomcat Busy/Current/Max에서 HTTP worker pool 포화를 확인한다.
+4. `Global Writer queue depth`, `command lag`, `processed/sec`로 writer 병목을 확인한다.
+5. `Write-behind queue depth`, queue lag, DB latency로 영속화 병목을 확인한다.
+6. HikariCP와 PostgreSQL 패널에서 DB connection/lock 원인을 확인한다.
+7. JVM heap/GC가 같은 시간대에 증가했는지 확인한다.
 
 ## 대표적인 조합
 
@@ -280,6 +293,7 @@ loaded_seed_enrollments == loaded_in_memory_enrollments
 | lock wait 증가 + baseline latency 증가 | pessimistic row lock 경합 |
 | duplicate 증가 + command 중복 0 | DB와 in-memory snapshot 불일치 가능성 |
 | Spring 5xx 0 + k6 system failure 증가 | connection 실패/status 0 가능성 |
+| Tomcat Busy = Max + k6 connect 지연 | Tomcat HTTP worker/ingress 포화 |
 | heap/GC pause 증가 + p99 증가 | JVM memory pressure 가능성 |
 
 ## 데이터가 보이지 않을 때
