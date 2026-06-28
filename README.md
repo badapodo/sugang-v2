@@ -472,6 +472,127 @@ Content-Type: application/json
 - 응답 timeout 이후에도 queue에 들어간 command는 writer가 나중에 처리할 수 있다.
 - 단일 writer의 처리량이 전체 matching 처리량 상한이며, write-behind worker 수를 늘려도 메모리 판정은 병렬화되지 않는다.
 
+Global In-Memory Single Writer Async Web 실험:
+
+```http
+POST /api/global-in-memory-single-writer-async-web/enrollments
+Content-Type: application/json
+
+{
+  "studentId": 1001,
+  "courseId": 20
+}
+```
+
+두 endpoint는 같은 global queue, writer, in-memory state와 write-behind 경로를 사용하며 최종 응답 의미도 같다.
+
+| endpoint | HTTP 대기 방식 | 최종 응답 |
+| --- | --- | --- |
+| `/api/global-in-memory-single-writer/enrollments` | controller thread가 `CompletableFuture.get(timeout)`으로 대기 | `200`, `400`, `409`, `429`, `504` |
+| `/api/global-in-memory-single-writer-async-web/enrollments` | `DeferredResult`를 반환하고 future callback이 응답을 완료 | `200`, `400`, `409`, `429`, `504` |
+
+Async Web 방식에서도 클라이언트는 writer의 최종 판정을 기다린다. 차이는 대기 중 Tomcat worker thread를 점유하지 않는다는 점이다. timeout과 writer 완료가 경합하면 먼저 완료된 응답만 반환하며, timeout 이후 늦게 완료된 future가 중복 응답을 만들지 않는다.
+
+피크 비교 실행:
+
+```bash
+PGPASSWORD=password psql -h localhost -U user -d enrollment \
+  -f infra/postgres/reset.sql
+
+docker compose restart app
+
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=global-in-memory-single-writer-async-web \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+별도 Micrometer 지표:
+
+- `global_single_writer_async_web.enqueued.count`
+- `global_single_writer_async_web.timeout.count`
+- `global_single_writer_async_web.inflight.count`
+- `global_single_writer_async_web.response.latency`
+
+운영상 내구성 한계와 timeout 이후 command 처리 가능성은 기존 Global In-Memory Single Writer와 동일하다.
+
+Global In-Memory Single Writer Fast 실험:
+
+```http
+POST /api/global-in-memory-single-writer-fast/enrollments?studentId=1001&courseId=20
+X-Scenario-Type: NORMAL
+```
+
+이 endpoint는 운영 API가 아니라 Spring MVC/Jackson overhead를 분리 측정하기 위한 실험용 endpoint다.
+
+- JSON `@RequestBody`를 사용하지 않고 `studentId`, `courseId`를 request parameter로 받는다.
+- 기존 `GlobalInMemorySingleWriterEnrollmentService`와 동기 `CompletableFuture.get(timeout)` 경로를 그대로 사용한다.
+- 성공 `200`, 도메인 실패 `400/409`, queue full `429`, timeout `504` 정책이 기존 global endpoint와 같다.
+- `DispatcherServlet`과 `RequestMappingHandlerAdapter`는 여전히 사용한다.
+- 제거되는 비교 대상은 `RequestResponseBodyMethodProcessor.readWithMessageConverters`와 Jackson JSON 역직렬화 경로다.
+
+```bash
+EXECUTOR_MODE=peak-arrival-rate \
+API_MODE=global-in-memory-single-writer-fast \
+SCENARIO_FILTER=ALL \
+PEAK_RATE=4800 PEAK_DURATION=10s \
+TAIL_RATE=1600 TAIL_DURATION=20s \
+PRE_ALLOCATED_VUS=5000 MAX_VUS=30000 \
+docker compose --profile load-prometheus run --rm k6-prometheus
+```
+
+Global write-behind 저장 모드:
+
+| 모드 | 설정 | 저장 방식 |
+| --- | --- | --- |
+| Batch JDBC (기본값) | `WRITE_BEHIND_MODE=batch-jdbc` | 최대 N개 event를 모아 하나의 transaction과 `JdbcTemplate.batchUpdate`로 저장 |
+| Single JPA (비교용) | `WRITE_BEHIND_MODE=single-jpa` | event마다 별도 transaction, 중복 조회, JPA `saveAndFlush` 실행 |
+
+Batch JDBC는 `enrollment.student_id`, `course_id`, `created_date`, `last_modified_date`를 insert한다. `id`는 PostgreSQL identity가 생성하며 audit user 컬럼은 기존 JPA 경로와 마찬가지로 값이 없으면 `NULL`이다. `(student_id, course_id)` 충돌은 `ON CONFLICT DO NOTHING`으로 처리하고 기존 duplicate/failure metric에 반영한다.
+
+```bash
+# 기본 batch 모드
+WRITE_BEHIND_MODE=batch-jdbc \
+WRITE_BEHIND_BATCH_SIZE=500 \
+WRITE_BEHIND_BATCH_WAIT_MS=10 \
+docker compose up --build -d app
+
+# 기존 단건 JPA 비교 모드
+WRITE_BEHIND_MODE=single-jpa \
+docker compose up --build -d app
+```
+
+Batch 전용 Micrometer metric:
+
+- `write_behind.batch.size`: 실제 저장 batch의 event 수
+- `write_behind.batch.success.count`: transaction이 성공한 batch 수
+- `write_behind.batch.failed.count`: transaction이 실패한 batch 수
+- `write_behind.batch.latency`: batch transaction 처리 시간
+
+Batch mode에서도 HTTP 응답, global writer 판정, write-behind queue와 기존 event 단위 success/failure/duplicate metric 의미는 유지된다.
+
+### JVM PID 확인
+```bash
+docker exec -it sugang-v2-baseline-app jcmd
+```
+### JFR 시작
+```bash
+docker exec -it sugang-v2-baseline-app jcmd 1 JFR.start \
+  name=global-writer-profile \
+  settings=profile \
+  delay=5s \
+  duration=60s \
+  filename=/tmp/global-writer-profile.jfr
+```
+
+### 복사
+```bash
+docker cp sugang-v2-baseline-app:/tmp/global-writer-profile.jfr ./global-writer-profile.jfr
+```
+
 Single Writer 설정값:
 
 | 환경변수 | 기본값 | 설명 |
@@ -486,6 +607,9 @@ Single Writer 설정값:
 | `GLOBAL_SINGLE_WRITER_QUEUE_CAPACITY` | `100000` | global command queue와 write-behind queue의 capacity |
 | `GLOBAL_SINGLE_WRITER_RESPONSE_TIMEOUT_MS` | `5000` | global writer 결과를 기다리는 최대 시간 |
 | `GLOBAL_SINGLE_WRITER_WRITE_BEHIND_WORKER_COUNT` | `4` | 비동기 DB insert worker 수 |
+| `WRITE_BEHIND_MODE` | `batch-jdbc` | `batch-jdbc` 또는 기존 비교용 `single-jpa` |
+| `WRITE_BEHIND_BATCH_SIZE` | `500` | 한 transaction에 저장할 최대 event 수 |
+| `WRITE_BEHIND_BATCH_WAIT_MS` | `10` | 첫 event 이후 batch를 모으는 최대 대기 시간(ms) |
 
 성공:
 

@@ -235,7 +235,7 @@ CSV 컬럼:
 | `429` | queue capacity 초과 |
 | `5xx/status 0` | 시스템 실패 |
 
-`API_MODE=single-writer-sync`와 `API_MODE=in-memory-single-writer`에서는 baseline/optimistic과 같은 기준을 사용한다. 즉 정상 수강신청은 `200`, 도메인 실패는 `400` 또는 `409`, queue full은 `429`, 응답 대기 timeout은 `504`다.
+`API_MODE=single-writer-sync`, `API_MODE=in-memory-single-writer`, `API_MODE=global-in-memory-single-writer`, `API_MODE=global-in-memory-single-writer-async-web`, `API_MODE=global-in-memory-single-writer-fast`에서는 baseline/optimistic과 같은 기준을 사용한다. 즉 정상 수강신청은 `200`, 도메인 실패는 `400` 또는 `409`, queue full은 `429`, 응답 대기 timeout은 `504`다.
 
 도메인 실패 payload는 4xx로 방어되면 성공으로 본다. 5xx는 Baseline API 또는 DB 병목이 사용자 오류를 넘어 서버 실패로 전이된 신호다.
 
@@ -278,7 +278,7 @@ response_body
 | 환경변수 | 예시 | 설명 |
 | --- | --- | --- |
 | `SCENARIO_FILTER` | `NORMAL` | 특정 scenario만 실행. 쉼표로 복수 지정 가능 |
-| `API_MODE` | `baseline` | `baseline`, `optimistic`, `single-writer`, `single-writer-sync`, `in-memory-single-writer` endpoint 선택 |
+| `API_MODE` | `baseline` | `baseline`, `optimistic`, `single-writer`, `single-writer-sync`, `in-memory-single-writer`, `global-in-memory-single-writer`, `global-in-memory-single-writer-async-web`, `global-in-memory-single-writer-fast` endpoint 선택 |
 | `BASE_PATH` | `/api/optimistic/enrollments` | `API_MODE` 대신 직접 호출 path를 지정할 때 사용 |
 | `LIMIT` | `100` | payload 상위 N건만 실행 |
 | `VUS` | `1` | k6 VU 수. 실제 iterations보다 크면 자동으로 iterations 이하로 보정 |

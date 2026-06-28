@@ -122,18 +122,17 @@ public class GlobalInMemorySingleWriterEnrollmentService {
     }
 
     public GlobalInMemoryEnrollmentResponse enroll(Long studentId, Long courseId, String scenarioType) {
-        GlobalInMemoryEnrollmentCommand command = GlobalInMemoryEnrollmentCommand.create(
+        Instant responseStartedAt = Instant.now();
+        GlobalInMemoryEnrollmentSubmission submission = submit(
                 studentId,
                 courseId,
                 scenarioType
         );
-        Instant responseStartedAt = Instant.now();
-        if (!queue.offer(command)) {
-            rejectedCounter.increment();
+        GlobalInMemoryEnrollmentCommand command = submission.getCommand();
+        if (!submission.isAccepted()) {
             responseWaitLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
             return GlobalInMemoryEnrollmentResponse.queueFull(command.getCommandId());
         }
-        enqueuedCounter.increment();
         inflightRequests.incrementAndGet();
 
         try {
@@ -157,6 +156,20 @@ public class GlobalInMemorySingleWriterEnrollmentService {
             inflightRequests.decrementAndGet();
             responseWaitLatencyTimer.record(Duration.between(responseStartedAt, Instant.now()));
         }
+    }
+
+    public GlobalInMemoryEnrollmentSubmission submit(Long studentId, Long courseId, String scenarioType) {
+        GlobalInMemoryEnrollmentCommand command = GlobalInMemoryEnrollmentCommand.create(
+                studentId,
+                courseId,
+                scenarioType
+        );
+        if (!queue.offer(command)) {
+            rejectedCounter.increment();
+            return GlobalInMemoryEnrollmentSubmission.rejected(command);
+        }
+        enqueuedCounter.increment();
+        return GlobalInMemoryEnrollmentSubmission.accepted(command);
     }
 
     private void consume() {

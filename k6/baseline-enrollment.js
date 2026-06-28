@@ -81,6 +81,19 @@ export const options = {
   scenarios: buildScenarios(),
   noConnectionReuse: false,
   noVUConnectionReuse: false,
+  systemTags: [
+    'proto',
+    'status',
+    'method',
+    'name',
+    'group',
+    'check',
+    'error',
+    'error_code',
+    'tls_version',
+    'scenario',
+    'expected_response',
+  ],
   thresholds: {
     http_req_duration: ['p(95)<2000', 'p(99)<5000'],
     dropped_iterations: ['count<1'],
@@ -138,23 +151,31 @@ function runEnrollment(row) {
     }
   }
 
-  const response = http.post(
-    `${BASE_URL}${BASE_PATH}`,
-    JSON.stringify({
-      studentId: Number(row.student_id),
-      courseId: Number(row.course_id),
-    }),
-    {
-      headers: {
+  const requestTags = {
+    name: BASE_PATH,
+    scenario_type: row.scenario_type,
+    expected_status: row.expected_status,
+  };
+  const fastMode = API_MODE === 'global-in-memory-single-writer-fast';
+  const requestUrl = fastMode
+    ? `${BASE_URL}${BASE_PATH}?studentId=${encodeURIComponent(row.student_id)}&courseId=${encodeURIComponent(row.course_id)}`
+    : `${BASE_URL}${BASE_PATH}`;
+  const requestBody = fastMode
+    ? null
+    : JSON.stringify({
+        studentId: Number(row.student_id),
+        courseId: Number(row.course_id),
+      });
+  const requestHeaders = fastMode
+    ? { 'X-Scenario-Type': row.scenario_type }
+    : {
         'Content-Type': 'application/json',
         'X-Scenario-Type': row.scenario_type,
-      },
-      tags: {
-        scenario_type: row.scenario_type,
-        expected_status: row.expected_status,
-      },
-    }
-  );
+      };
+  const response = http.post(requestUrl, requestBody, {
+    headers: requestHeaders,
+    tags: requestTags,
+  });
 
   const actualStatus = response.status || 0;
   const statusBucket = toStatusBucket(actualStatus);
@@ -530,6 +551,8 @@ function isQueueFull(actualStatus) {
     'single-writer-sync',
     'in-memory-single-writer',
     'global-in-memory-single-writer',
+    'global-in-memory-single-writer-async-web',
+    'global-in-memory-single-writer-fast',
   ].includes(API_MODE) && actualStatus === 429;
 }
 
@@ -649,6 +672,8 @@ function validateApiMode() {
     'single-writer-sync',
     'in-memory-single-writer',
     'global-in-memory-single-writer',
+    'global-in-memory-single-writer-async-web',
+    'global-in-memory-single-writer-fast',
   ];
   if (!supportedModes.includes(API_MODE) && !__ENV.BASE_PATH) {
     throw new Error(`Unsupported API_MODE=${API_MODE}. Supported modes: ${supportedModes.join(', ')}`);
@@ -670,6 +695,12 @@ function pathForApiMode(mode) {
   }
   if (mode === 'global-in-memory-single-writer') {
     return '/api/global-in-memory-single-writer/enrollments';
+  }
+  if (mode === 'global-in-memory-single-writer-async-web') {
+    return '/api/global-in-memory-single-writer-async-web/enrollments';
+  }
+  if (mode === 'global-in-memory-single-writer-fast') {
+    return '/api/global-in-memory-single-writer-fast/enrollments';
   }
   return '/api/baseline/enrollments';
 }

@@ -49,6 +49,8 @@ Dashboard는 다음 데이터를 함께 사용한다.
 
 p99만 크게 증가하면 일부 요청이 queue, lock, connection 대기에 오래 머무는 tail latency 현상이다. k6 latency가 Spring latency보다 훨씬 크면 서버 처리 외의 연결·전송 대기를 함께 의심한다.
 
+k6 remote-write는 `K6_PROMETHEUS_RW_TREND_STATS=p(95),p(99)`로 두 quantile을 생성한다. k6 duration metric은 초 단위이므로 Dashboard에서 추가 단위 변환을 하지 않는다. 모든 요청은 endpoint 단위의 고정 `name` tag를 사용하며 query parameter별 time series를 만들지 않는다.
+
 ### 3. HTTP status ratio
 
 | 계열 | 의미 |
