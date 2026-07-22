@@ -583,14 +583,14 @@ docker exec -it sugang-v2-baseline-app jcmd
 docker exec -it sugang-v2-baseline-app jcmd 1 JFR.start \
   name=global-writer-profile \
   settings=profile \
-  delay=5s \
+  delay=15s \
   duration=60s \
   filename=/tmp/global-writer-profile.jfr
 ```
 
 ### 복사
 ```bash
-docker cp sugang-v2-baseline-app:/tmp/global-writer-profile.jfr ./global-writer-profile.jfr
+docker cp sugang-v2-baseline-app:/tmp/global-writer-profile.jfr ./global-writer-profile-plane.jfr
 ```
 
 Single Writer 설정값:

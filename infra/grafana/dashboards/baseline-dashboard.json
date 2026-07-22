@@ -53,11 +53,13 @@
       "targets": [
         {
           "expr": "sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m]))",
-          "legendFormat": "Spring request rate"
+          "legendFormat": "Spring request rate",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(k6_http_reqs_total[1m]))",
-          "legendFormat": "k6 request rate"
+          "legendFormat": "k6 request rate",
+          "interval": "1s"
         }
       ],
       "title": "Request rate",
@@ -94,19 +96,23 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m])) by (le))",
-          "legendFormat": "Spring p95"
+          "legendFormat": "Spring p95",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m])) by (le))",
-          "legendFormat": "Spring p99"
+          "legendFormat": "Spring p99",
+          "interval": "1s"
         },
         {
           "expr": "max(k6_http_req_duration_p95{name=~\"/api/.*/enrollments\"})",
-          "legendFormat": "k6 p95"
+          "legendFormat": "k6 p95",
+          "interval": "1s"
         },
         {
           "expr": "max(k6_http_req_duration_p99{name=~\"/api/.*/enrollments\"})",
-          "legendFormat": "k6 p99"
+          "legendFormat": "k6 p99",
+          "interval": "1s"
         }
       ],
       "title": "P95/P99 latency",
@@ -143,15 +149,18 @@
       "targets": [
         {
           "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\", status=~\"2..\"}[1m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m])), 0.001))",
-          "legendFormat": "2xx ratio"
+          "legendFormat": "2xx ratio",
+          "interval": "1s"
         },
         {
           "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\", status=~\"4..\"}[1m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m])), 0.001))",
-          "legendFormat": "4xx ratio"
+          "legendFormat": "4xx ratio",
+          "interval": "1s"
         },
         {
           "expr": "((sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\", status=~\"5..\"}[1m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{job=\"sugang-v2-baseline\", uri=~\"/api/.*/enrollments\"}[1m])), 0.001))",
-          "legendFormat": "5xx ratio"
+          "legendFormat": "5xx ratio",
+          "interval": "1s"
         }
       ],
       "title": "HTTP status ratio",
@@ -182,15 +191,18 @@
       "targets": [
         {
           "expr": "hikaricp_connections_active{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "active"
+          "legendFormat": "active",
+          "interval": "1s"
         },
         {
           "expr": "hikaricp_connections_pending{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "pending"
+          "legendFormat": "pending",
+          "interval": "1s"
         },
         {
           "expr": "hikaricp_connections_max{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "max"
+          "legendFormat": "max",
+          "interval": "1s"
         }
       ],
       "title": "HikariCP active/pending",
@@ -221,7 +233,8 @@
       "targets": [
         {
           "expr": "sum(pg_stat_activity_count{job=\"postgres-exporter\"}) by (state)",
-          "legendFormat": "{{state}}"
+          "legendFormat": "{{state}}",
+          "interval": "1s"
         }
       ],
       "title": "PostgreSQL connections",
@@ -252,11 +265,13 @@
       "targets": [
         {
           "expr": "sum(pg_stat_activity_wait_count{job=\"postgres-exporter\", datname=\"enrollment\", wait_event_type=\"Lock\"}) or vector(0)",
-          "legendFormat": "lock wait sessions"
+          "legendFormat": "lock wait sessions",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(pg_stat_database_deadlocks{job=\"postgres-exporter\"}[1m]))",
-          "legendFormat": "deadlocks/sec"
+          "legendFormat": "deadlocks/sec",
+          "interval": "1s"
         }
       ],
       "title": "PostgreSQL lock wait / deadlock",
@@ -298,15 +313,18 @@
       "targets": [
         {
           "expr": "sum(rate(global_single_writer_enqueued_total[1m]))",
-          "legendFormat": "enqueued/sec"
+          "legendFormat": "enqueued/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(global_single_writer_processed_total[1m]))",
-          "legendFormat": "processed/sec"
+          "legendFormat": "processed/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(global_single_writer_success_total[1m]))",
-          "legendFormat": "success/sec"
+          "legendFormat": "success/sec",
+          "interval": "1s"
         }
       ]
     },
@@ -333,7 +351,8 @@
       "targets": [
         {
           "expr": "global_single_writer_queue_depth",
-          "legendFormat": "commands"
+          "legendFormat": "commands",
+          "interval": "1s"
         }
       ]
     },
@@ -360,11 +379,13 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_match_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p95"
+          "legendFormat": "p95",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_match_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p99"
+          "legendFormat": "p99",
+          "interval": "1s"
         }
       ]
     },
@@ -391,11 +412,13 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_response_wait_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p95"
+          "legendFormat": "p95",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_response_wait_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "p99"
+          "legendFormat": "p99",
+          "interval": "1s"
         }
       ]
     },
@@ -422,7 +445,8 @@
       "targets": [
         {
           "expr": "global_single_writer_inflight_requests",
-          "legendFormat": "waiting"
+          "legendFormat": "waiting",
+          "interval": "1s"
         }
       ]
     },
@@ -449,7 +473,8 @@
       "targets": [
         {
           "expr": "global_single_writer_write_behind_queue_depth",
-          "legendFormat": "events"
+          "legendFormat": "events",
+          "interval": "1s"
         }
       ]
     },
@@ -476,15 +501,18 @@
       "targets": [
         {
           "expr": "sum(rate(global_single_writer_write_behind_success_total[1m]))",
-          "legendFormat": "success/sec"
+          "legendFormat": "success/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum by (reason) (rate(global_single_writer_write_behind_failed_total[1m]))",
-          "legendFormat": "failed {{reason}}/sec"
+          "legendFormat": "failed {{reason}}/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(global_single_writer_write_behind_processed_total[1m]))",
-          "legendFormat": "processed/sec"
+          "legendFormat": "processed/sec",
+          "interval": "1s"
         }
       ]
     },
@@ -511,15 +539,18 @@
       "targets": [
         {
           "expr": "global_single_writer_write_behind_duplicate_total",
-          "legendFormat": "duplicates"
+          "legendFormat": "duplicates",
+          "interval": "1s"
         },
         {
           "expr": "global_single_writer_write_behind_duplicate_command_enqueue_total",
-          "legendFormat": "duplicate command enqueue"
+          "legendFormat": "duplicate command enqueue",
+          "interval": "1s"
         },
         {
           "expr": "global_single_writer_write_behind_duplicate_command_processed_total",
-          "legendFormat": "duplicate command processed"
+          "legendFormat": "duplicate command processed",
+          "interval": "1s"
         }
       ]
     },
@@ -546,19 +577,23 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_write_behind_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "DB p95"
+          "legendFormat": "DB p95",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_write_behind_latency_seconds_bucket[1m])) by (le))",
-          "legendFormat": "DB p99"
+          "legendFormat": "DB p99",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(global_single_writer_write_behind_lag_seconds_bucket[1m])) by (le))",
-          "legendFormat": "queue lag p95"
+          "legendFormat": "queue lag p95",
+          "interval": "1s"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(global_single_writer_write_behind_lag_seconds_bucket[1m])) by (le))",
-          "legendFormat": "queue lag p99"
+          "legendFormat": "queue lag p99",
+          "interval": "1s"
         }
       ]
     },
@@ -585,7 +620,8 @@
       "targets": [
         {
           "expr": "sum by (reason) (global_single_writer_domain_failure_total)",
-          "legendFormat": "{{reason}}"
+          "legendFormat": "{{reason}}",
+          "interval": "1s"
         }
       ]
     },
@@ -612,15 +648,18 @@
       "targets": [
         {
           "expr": "sum(rate(http_server_requests_seconds_count{uri=\"/api/global-in-memory-single-writer/enrollments\",status=~\"5..\"}[1m]))",
-          "legendFormat": "Spring 5xx/sec"
+          "legendFormat": "Spring 5xx/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(k6_baseline_system_failure_total[1m])) or vector(0)",
-          "legendFormat": "k6 status 0/5xx/sec"
+          "legendFormat": "k6 status 0/5xx/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(global_single_writer_timeout_total[1m]))",
-          "legendFormat": "writer timeout/sec"
+          "legendFormat": "writer timeout/sec",
+          "interval": "1s"
         }
       ]
     },
@@ -647,15 +686,18 @@
       "targets": [
         {
           "expr": "global_single_writer_success_total",
-          "legendFormat": "writer success"
+          "legendFormat": "writer success",
+          "interval": "1s"
         },
         {
           "expr": "global_single_writer_write_behind_enqueued_total",
-          "legendFormat": "write-behind enqueued"
+          "legendFormat": "write-behind enqueued",
+          "interval": "1s"
         },
         {
           "expr": "global_single_writer_write_behind_enqueue_gap",
-          "legendFormat": "gap"
+          "legendFormat": "gap",
+          "interval": "1s"
         }
       ]
     },
@@ -682,11 +724,13 @@
       "targets": [
         {
           "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})",
-          "legendFormat": "used"
+          "legendFormat": "used",
+          "interval": "1s"
         },
         {
           "expr": "sum(jvm_memory_max_bytes{area=\"heap\"})",
-          "legendFormat": "max"
+          "legendFormat": "max",
+          "interval": "1s"
         }
       ]
     },
@@ -713,11 +757,13 @@
       "targets": [
         {
           "expr": "sum(rate(jvm_gc_pause_seconds_sum[1m]))",
-          "legendFormat": "pause seconds/sec"
+          "legendFormat": "pause seconds/sec",
+          "interval": "1s"
         },
         {
           "expr": "sum(rate(jvm_gc_pause_seconds_count[1m]))",
-          "legendFormat": "collections/sec"
+          "legendFormat": "collections/sec",
+          "interval": "1s"
         }
       ]
     },
@@ -745,7 +791,8 @@
       "targets": [
         {
           "expr": "tomcat_threads_busy_threads{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "{{name}} busy"
+          "legendFormat": "{{name}} busy",
+          "interval": "1s"
         }
       ]
     },
@@ -773,7 +820,8 @@
       "targets": [
         {
           "expr": "tomcat_threads_current_threads{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "{{name}} current"
+          "legendFormat": "{{name}} current",
+          "interval": "1s"
         }
       ]
     },
@@ -801,7 +849,8 @@
       "targets": [
         {
           "expr": "tomcat_threads_config_max_threads{job=\"sugang-v2-baseline\"}",
-          "legendFormat": "{{name}} max"
+          "legendFormat": "{{name}} max",
+          "interval": "1s"
         }
       ]
     }
