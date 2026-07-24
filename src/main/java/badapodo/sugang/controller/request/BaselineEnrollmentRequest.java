@@ -17,3 +17,13 @@ public class BaselineEnrollmentRequest {
     @NotNull(message = "Course ID cannot be null")
     private Long courseId;
 }
+
+
+//public record BaselineEnrollmentRequest(
+//        //@NotNull(message = "Student ID cannot be null")
+//        Long studentId,
+//
+//        //@NotNull(message = "Course ID cannot be null")
+//        Long courseId
+//) {
+//}
