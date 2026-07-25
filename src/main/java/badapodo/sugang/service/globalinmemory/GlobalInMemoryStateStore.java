@@ -130,6 +130,72 @@ public class GlobalInMemoryStateStore {
                 .addAll(courseTimesByCourseId.getOrDefault(courseId, Collections.emptyList()));
     }
 
+    public GlobalInMemoryEnrollmentRejectionReason evaluateAndEnroll(Long studentId, Long courseId) {
+        GlobalInMemoryEnrollmentRejectionReason rejectionReason = evaluate(studentId, courseId);
+        if (rejectionReason != null) {
+            return rejectionReason;
+        }
+
+        GlobalCourseState courseState = courseStates.get(courseId);
+        if (courseState == null) {
+            return GlobalInMemoryEnrollmentRejectionReason.COURSE_NOT_FOUND;
+        }
+        courseState.enroll();
+        enrolledCourseIdsByStudentId.computeIfAbsent(studentId, ignored -> new HashSet<>()).add(courseId);
+        studentTimetables.computeIfAbsent(studentId, ignored -> new ArrayList<>())
+                .addAll(courseTimesByCourseId.getOrDefault(courseId, Collections.emptyList()));
+        return null;
+    }
+
+    private GlobalInMemoryEnrollmentRejectionReason evaluate(Long studentId, Long courseId) {
+        Long departmentId = studentDepartmentIds.get(studentId);
+        if (departmentId == null) {
+            return GlobalInMemoryEnrollmentRejectionReason.STUDENT_NOT_FOUND;
+        }
+
+        GlobalCourseState courseState = courseStates.get(courseId);
+        if (courseState == null) {
+            return GlobalInMemoryEnrollmentRejectionReason.COURSE_NOT_FOUND;
+        }
+
+        Set<Long> requiredCourseIds = prerequisiteCourseIdsByCourseAndDepartment.getOrDefault(
+                prerequisiteKey(courseId, departmentId),
+                Collections.emptySet()
+        );
+        Set<Long> completedCourseIds = completedCourseIdsByStudentId.getOrDefault(studentId, Collections.emptySet());
+        for (Long requiredCourseId : requiredCourseIds) {
+            if (!completedCourseIds.contains(requiredCourseId)) {
+                return GlobalInMemoryEnrollmentRejectionReason.PREREQUISITE_NOT_MET;
+            }
+        }
+
+        if (enrolledCourseIdsByStudentId.getOrDefault(studentId, Collections.emptySet()).contains(courseId)
+                || completedCourseIds.contains(courseId)) {
+            return GlobalInMemoryEnrollmentRejectionReason.DUPLICATE_ENROLLMENT;
+        }
+
+        List<InMemoryCourseTime> requestedTimes = courseTimesByCourseId.getOrDefault(
+                courseId,
+                Collections.emptyList()
+        );
+        List<InMemoryCourseTime> enrolledTimes = studentTimetables.getOrDefault(
+                studentId,
+                Collections.emptyList()
+        );
+        for (InMemoryCourseTime requestedTime : requestedTimes) {
+            for (InMemoryCourseTime enrolledTime : enrolledTimes) {
+                if (requestedTime.overlaps(enrolledTime)) {
+                    return GlobalInMemoryEnrollmentRejectionReason.SCHEDULE_CONFLICT;
+                }
+            }
+        }
+
+        if (!courseState.hasRemainingCapacity()) {
+            return GlobalInMemoryEnrollmentRejectionReason.CAPACITY_EXCEEDED;
+        }
+        return null;
+    }
+
     private void validatePrerequisite(Long studentId, Long courseId) {
         Long departmentId = studentDepartmentIds.get(studentId);
         if (departmentId == null) {

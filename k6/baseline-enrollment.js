@@ -25,7 +25,7 @@ const MAX_VUS = Number(__ENV.MAX_VUS || Math.max(PRE_ALLOCATED_VUS, REQUESTED_VU
 const SAMPLE_LIMIT = 20;
 
 const SCENARIOS = ['NORMAL', 'HOTSPOT', 'PREREQUISITE_FAIL', 'TIME_CONFLICT', 'CAPACITY_OVER', 'DUPLICATE'];
-const STATUS_BUCKETS = ['0', '200', '202', '400', '409', '429', '5xx'];
+const STATUS_BUCKETS = ['0', '200', '201', '202', '400', '404', '409', '422', '429', '503', '5xx', 'other'];
 const REQUIRED_COLUMNS = ['student_id', 'course_id', 'scenario_type', 'expected_status', 'scheduled_offset_ms'];
 
 const strictExpectedStatusMismatch = new Counter('baseline_strict_expected_status_mismatch_total');
@@ -55,7 +55,7 @@ const payloadMetadata = new SharedArray('enrollment payload metadata', () => {
   const metadata = {
     row_count: rows.length,
     scenario_distribution: countValues(rows, 'scenario_type', SCENARIOS),
-    expected_status_distribution: countValues(rows, 'expected_status', ['200', '400', '409']),
+    expected_status_distribution: countValues(rows, 'expected_status', ['200', '201', '400', '404', '409', '422', '503']),
   };
   return [metadata];
 });
@@ -154,7 +154,7 @@ function runEnrollment(row) {
   const requestTags = {
     name: BASE_PATH,
     scenario_type: row.scenario_type,
-    expected_status: row.expected_status,
+    expected_status: expectedContract(row).status,
   };
   const fastMode = API_MODE === 'global-in-memory-single-writer-fast';
   const requestUrl = fastMode
@@ -180,12 +180,14 @@ function runEnrollment(row) {
   const actualStatus = response.status || 0;
   const statusBucket = toStatusBucket(actualStatus);
   const reason = extractReason(response);
+  const bodyStatus = extractBodyStatus(response);
   const k6Error = extractK6Error(response);
-  const accepted = isAccepted(actualStatus);
-  const queueFull = isQueueFull(actualStatus);
-  const strictMismatch = isStrictMismatch(row.expected_status, actualStatus);
-  const systemFailure = Boolean(response.error) || actualStatus === 0 || actualStatus >= 500;
-  const critical = isCriticalMismatch(row.expected_status, actualStatus, systemFailure);
+  const expected = expectedContract(row);
+  const accepted = isAccepted(actualStatus, bodyStatus);
+  const queueFull = isQueueFull(actualStatus, reason);
+  const strictMismatch = isStrictMismatch(expected, actualStatus, bodyStatus, reason);
+  const systemFailure = Boolean(response.error) || actualStatus === 0 || (actualStatus >= 500 && actualStatus < 600);
+  const critical = isCriticalMismatch(expected, actualStatus, systemFailure);
 
   scenarioRequests.add(1, { scenario_type: row.scenario_type });
   addScenarioStatus(row.scenario_type, statusBucket);
@@ -197,7 +199,7 @@ function runEnrollment(row) {
     addStatusZeroSample(row, response, k6Error);
   }
 
-  if (actualStatus >= 500) {
+  if (actualStatus >= 500 && actualStatus < 600) {
     realFiveXxCount.add(1, {
       scenario_type: row.scenario_type,
       status: String(actualStatus),
@@ -223,16 +225,16 @@ function runEnrollment(row) {
   if (strictMismatch) {
     strictExpectedStatusMismatch.add(1, {
       scenario_type: row.scenario_type,
-      expected_status: row.expected_status,
+      expected_status: expected.status,
       actual_status: String(actualStatus),
     });
-    addMismatchSample(row, response);
+    addMismatchSample(row, response, expected);
   }
 
   if (critical) {
     criticalMismatch.add(1, {
       scenario_type: row.scenario_type,
-      expected_status: row.expected_status,
+      expected_status: expected.status,
       actual_status: String(actualStatus),
     });
   }
@@ -312,6 +314,15 @@ function createReasonCounters() {
     SingleWriterResponseTimeoutException: new Counter('baseline_reason_single_writer_response_timeout_total'),
     InMemorySingleWriterResponseTimeoutException: new Counter('baseline_reason_in_memory_single_writer_response_timeout_total'),
     GlobalInMemorySingleWriterResponseTimeoutException: new Counter('baseline_reason_global_in_memory_single_writer_response_timeout_total'),
+    STUDENT_NOT_FOUND: new Counter('baseline_reason_student_not_found_total'),
+    COURSE_NOT_FOUND: new Counter('baseline_reason_course_not_found_total'),
+    CAPACITY_EXCEEDED: new Counter('baseline_reason_capacity_exceeded_total'),
+    DUPLICATE_ENROLLMENT: new Counter('baseline_reason_duplicate_enrollment_contract_total'),
+    PREREQUISITE_NOT_MET: new Counter('baseline_reason_prerequisite_not_met_contract_total'),
+    SCHEDULE_CONFLICT: new Counter('baseline_reason_schedule_conflict_total'),
+    COMMAND_ID_CONFLICT: new Counter('baseline_reason_command_id_conflict_total'),
+    WRITER_UNAVAILABLE: new Counter('baseline_reason_writer_unavailable_total'),
+    COMMAND_TIMEOUT: new Counter('baseline_reason_command_timeout_total'),
     Unknown: new Counter('baseline_reason_unknown_total'),
   };
 }
@@ -334,6 +345,10 @@ function loadPayloadRows() {
   });
 
   validateRows(rows);
+  rows = rows.map((row) => ({
+    ...row,
+    expected_status: expectedContract(row).status,
+  }));
 
   rows = rows.sort((left, right) => {
     const leftOffset = Number(left.scheduled_offset_ms || 0);
@@ -453,9 +468,14 @@ function validateLoadedPayloadDistribution(scenarioDistribution, statusDistribut
     }
 
     const successCount = (scenarioDistribution.NORMAL || 0) + (scenarioDistribution.HOTSPOT || 0);
-    const fourXxCount = (statusDistribution['400'] || 0) + (statusDistribution['409'] || 0);
-    if (successCount !== (statusDistribution['200'] || 0) || fourXxCount === 0) {
-      throw new Error(`Invalid payload expected_status distribution. scenario success=${successCount}, status200=${statusDistribution['200'] || 0}, status4xx=${fourXxCount}`);
+    const expectedSuccessStatus = API_MODE === 'global-in-memory-single-writer' ? '201' : '200';
+    const statusSuccessCount = statusDistribution[expectedSuccessStatus] || 0;
+    const fourXxCount = (statusDistribution['400'] || 0)
+      + (statusDistribution['404'] || 0)
+      + (statusDistribution['409'] || 0)
+      + (statusDistribution['422'] || 0);
+    if (successCount !== statusSuccessCount || fourXxCount === 0) {
+      throw new Error(`Invalid payload expected_status distribution. scenario success=${successCount}, status${expectedSuccessStatus}=${statusSuccessCount}, status4xx=${fourXxCount}`);
     }
   }
 }
@@ -514,30 +534,50 @@ function toStatusBucket(actualStatus) {
     return '200';
   }
 
+  if (actualStatus === 201) {
+    return '201';
+  }
+
   if (actualStatus === 202) {
     return '202';
+  }
+
+  if (actualStatus === 400) {
+    return '400';
+  }
+
+  if (actualStatus === 404) {
+    return '404';
   }
 
   if (actualStatus === 409) {
     return '409';
   }
 
+  if (actualStatus === 422) {
+    return '422';
+  }
+
   if (actualStatus === 429) {
     return '429';
   }
 
-  if (actualStatus >= 500) {
+  if (actualStatus === 503) {
+    return '503';
+  }
+
+  if (actualStatus >= 500 && actualStatus < 600) {
     return '5xx';
   }
 
-  if (actualStatus >= 400 && actualStatus < 500) {
-    return '400';
-  }
-
-  return '5xx';
+  return 'other';
 }
 
-function isAccepted(actualStatus) {
+function isAccepted(actualStatus, bodyStatus) {
+  if (API_MODE === 'global-in-memory-single-writer') {
+    return actualStatus === 201 && bodyStatus === 'ACCEPTED';
+  }
+
   if (API_MODE === 'single-writer') {
     return actualStatus === 202;
   }
@@ -545,22 +585,39 @@ function isAccepted(actualStatus) {
   return actualStatus === 200;
 }
 
-function isQueueFull(actualStatus) {
+function isQueueFull(actualStatus, reason) {
+  if (API_MODE === 'global-in-memory-single-writer') {
+    return actualStatus === 503 && reason === 'WRITER_UNAVAILABLE';
+  }
+
   return [
     'single-writer',
     'single-writer-sync',
     'in-memory-single-writer',
-    'global-in-memory-single-writer',
     'global-in-memory-single-writer-async-web',
     'global-in-memory-single-writer-fast',
   ].includes(API_MODE) && actualStatus === 429;
 }
 
-function isStrictMismatch(expectedStatus, actualStatus) {
+function isStrictMismatch(expected, actualStatus, bodyStatus, reason) {
   if (API_MODE === 'single-writer') {
     return actualStatus !== 202 && actualStatus !== 429;
   }
 
+  if (API_MODE === 'global-in-memory-single-writer') {
+    if (String(actualStatus) !== expected.status) {
+      return true;
+    }
+    if (expected.bodyStatus && bodyStatus !== expected.bodyStatus) {
+      return true;
+    }
+    if (expected.reason && reason !== expected.reason) {
+      return true;
+    }
+    return false;
+  }
+
+  const expectedStatus = expected.status;
   if (expectedStatus === '200') {
     return actualStatus !== 200;
   }
@@ -572,7 +629,7 @@ function isStrictMismatch(expectedStatus, actualStatus) {
   return actualStatus !== Number(expectedStatus);
 }
 
-function isCriticalMismatch(expectedStatus, actualStatus, systemFailure) {
+function isCriticalMismatch(expected, actualStatus, systemFailure) {
   if (systemFailure) {
     return true;
   }
@@ -581,11 +638,40 @@ function isCriticalMismatch(expectedStatus, actualStatus, systemFailure) {
     return false;
   }
 
-  if (expectedStatus === '400' && actualStatus === 200) {
+  if (expected.status === '400' && actualStatus === 200) {
+    return true;
+  }
+
+  if (API_MODE === 'global-in-memory-single-writer' && expected.bodyStatus === 'REJECTED' && actualStatus === 201) {
     return true;
   }
 
   return false;
+}
+
+function expectedContract(row) {
+  if (API_MODE !== 'global-in-memory-single-writer') {
+    return {
+      status: row.expected_status,
+      bodyStatus: '',
+      reason: '',
+    };
+  }
+
+  const byScenario = {
+    NORMAL: { status: '201', bodyStatus: 'ACCEPTED', reason: '' },
+    HOTSPOT: { status: '201', bodyStatus: 'ACCEPTED', reason: '' },
+    PREREQUISITE_FAIL: { status: '422', bodyStatus: 'REJECTED', reason: 'PREREQUISITE_NOT_MET' },
+    TIME_CONFLICT: { status: '409', bodyStatus: 'REJECTED', reason: 'SCHEDULE_CONFLICT' },
+    CAPACITY_OVER: { status: '409', bodyStatus: 'REJECTED', reason: 'CAPACITY_EXCEEDED' },
+    DUPLICATE: { status: '409', bodyStatus: 'REJECTED', reason: 'DUPLICATE_ENROLLMENT' },
+  };
+
+  return byScenario[row.scenario_type] || {
+    status: row.expected_status,
+    bodyStatus: '',
+    reason: '',
+  };
 }
 
 function textSummary(data) {
@@ -636,7 +722,7 @@ function textSummary(data) {
     formatDistribution(PAYLOAD_SCENARIO_DISTRIBUTION, SCENARIOS),
     '',
     'Payload expected_status distribution',
-    formatDistribution(PAYLOAD_EXPECTED_STATUS_DISTRIBUTION, ['200', '400', '409']),
+    formatDistribution(PAYLOAD_EXPECTED_STATUS_DISTRIBUTION, ['200', '201', '400', '404', '409', '422', '503']),
     '',
     'Scenario status count',
     formatScenarioStatusCounts(metrics),
@@ -732,11 +818,20 @@ function formatReasonCounts(metrics) {
     `- SingleWriterResponseTimeoutException: ${metricCount(metrics, 'baseline_reason_single_writer_response_timeout_total')}`,
     `- InMemorySingleWriterResponseTimeoutException: ${metricCount(metrics, 'baseline_reason_in_memory_single_writer_response_timeout_total')}`,
     `- GlobalInMemorySingleWriterResponseTimeoutException: ${metricCount(metrics, 'baseline_reason_global_in_memory_single_writer_response_timeout_total')}`,
+    `- STUDENT_NOT_FOUND: ${metricCount(metrics, 'baseline_reason_student_not_found_total')}`,
+    `- COURSE_NOT_FOUND: ${metricCount(metrics, 'baseline_reason_course_not_found_total')}`,
+    `- CAPACITY_EXCEEDED: ${metricCount(metrics, 'baseline_reason_capacity_exceeded_total')}`,
+    `- DUPLICATE_ENROLLMENT: ${metricCount(metrics, 'baseline_reason_duplicate_enrollment_contract_total')}`,
+    `- PREREQUISITE_NOT_MET: ${metricCount(metrics, 'baseline_reason_prerequisite_not_met_contract_total')}`,
+    `- SCHEDULE_CONFLICT: ${metricCount(metrics, 'baseline_reason_schedule_conflict_total')}`,
+    `- COMMAND_ID_CONFLICT: ${metricCount(metrics, 'baseline_reason_command_id_conflict_total')}`,
+    `- WRITER_UNAVAILABLE: ${metricCount(metrics, 'baseline_reason_writer_unavailable_total')}`,
+    `- COMMAND_TIMEOUT: ${metricCount(metrics, 'baseline_reason_command_timeout_total')}`,
     `- Unknown: ${metricCount(metrics, 'baseline_reason_unknown_total')}`,
   ].join('\n');
 }
 
-function addMismatchSample(row, response) {
+function addMismatchSample(row, response, expected) {
   if (responseSamples.length >= SAMPLE_LIMIT) {
     return;
   }
@@ -744,8 +839,12 @@ function addMismatchSample(row, response) {
   const sample = {
     request_id: row.request_id,
     scenario_type: row.scenario_type,
-    expected_status: row.expected_status,
+    expected_status: expected.status,
+    expected_body_status: expected.bodyStatus,
+    expected_reason: expected.reason,
     actual_status: response.status || 0,
+    actual_body_status: extractBodyStatus(response),
+    actual_reason: extractReason(response),
     student_id: row.student_id,
     course_id: row.course_id,
     response_body: sanitizeBody(response.body),
@@ -779,7 +878,11 @@ function sampleCheckName(sample) {
     request_id: sample.request_id,
     scenario_type: sample.scenario_type,
     expected_status: sample.expected_status,
+    expected_body_status: sample.expected_body_status,
+    expected_reason: sample.expected_reason,
     actual_status: sample.actual_status,
+    actual_body_status: sample.actual_body_status,
+    actual_reason: sample.actual_reason,
     student_id: sample.student_id,
     course_id: sample.course_id,
     response_body: sample.response_body.slice(0, 300),
@@ -869,6 +972,15 @@ function extractReason(response) {
       'SingleWriterResponseTimeoutException',
       'InMemorySingleWriterResponseTimeoutException',
       'GlobalInMemorySingleWriterResponseTimeoutException',
+      'STUDENT_NOT_FOUND',
+      'COURSE_NOT_FOUND',
+      'CAPACITY_EXCEEDED',
+      'DUPLICATE_ENROLLMENT',
+      'PREREQUISITE_NOT_MET',
+      'SCHEDULE_CONFLICT',
+      'COMMAND_ID_CONFLICT',
+      'WRITER_UNAVAILABLE',
+      'COMMAND_TIMEOUT',
     ];
     for (const reason of known) {
       if (body.includes(reason)) {
@@ -876,6 +988,19 @@ function extractReason(response) {
       }
     }
     return 'Unknown';
+  }
+}
+
+function extractBodyStatus(response) {
+  if (!response || !response.body) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(response.body);
+    return parsed.status || '';
+  } catch (error) {
+    return '';
   }
 }
 

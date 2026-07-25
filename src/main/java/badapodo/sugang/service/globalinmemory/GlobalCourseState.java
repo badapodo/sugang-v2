@@ -16,6 +16,10 @@ final class GlobalCourseState {
         }
     }
 
+    boolean hasRemainingCapacity() {
+        return remainingCapacity > 0;
+    }
+
     void enroll() {
         remainingCapacity--;
     }

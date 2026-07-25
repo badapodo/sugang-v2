@@ -9,27 +9,56 @@ import lombok.Getter;
 @Getter
 public class GlobalInMemoryEnrollmentCommand {
 
-    private final String commandId;
+    private final UUID commandId;
     private final Long studentId;
     private final Long courseId;
     private final String scenarioType;
     private final Instant enqueuedAt;
+    private final Instant requestedAt;
+    private final CompletableFuture<GlobalInMemoryEnrollmentCommandResult> commandResultFuture;
     private final CompletableFuture<InMemoryEnrollmentResult> responseFuture;
 
-    private GlobalInMemoryEnrollmentCommand(Long studentId, Long courseId, String scenarioType) {
-        this.commandId = UUID.randomUUID().toString();
+    private GlobalInMemoryEnrollmentCommand(UUID commandId, Long studentId, Long courseId, String scenarioType) {
+        this.commandId = commandId;
         this.studentId = studentId;
         this.courseId = courseId;
         this.scenarioType = scenarioType;
-        this.enqueuedAt = Instant.now();
+        this.requestedAt = Instant.now();
+        this.enqueuedAt = requestedAt;
+        this.commandResultFuture = new CompletableFuture<>();
         this.responseFuture = new CompletableFuture<>();
     }
 
     public static GlobalInMemoryEnrollmentCommand create(Long studentId, Long courseId, String scenarioType) {
-        return new GlobalInMemoryEnrollmentCommand(studentId, courseId, scenarioType);
+        return new GlobalInMemoryEnrollmentCommand(UUID.randomUUID(), studentId, courseId, scenarioType);
     }
 
-    public void complete(InMemoryEnrollmentResult result) {
-        responseFuture.complete(result);
+    public static GlobalInMemoryEnrollmentCommand create(
+            UUID commandId,
+            Long studentId,
+            Long courseId,
+            String scenarioType
+    ) {
+        return new GlobalInMemoryEnrollmentCommand(commandId, studentId, courseId, scenarioType);
+    }
+
+    public void complete(GlobalInMemoryEnrollmentCommandResult result) {
+        commandResultFuture.complete(result);
+        responseFuture.complete(toLegacyResult(result));
+    }
+
+    public void completeExceptionally(RuntimeException failure) {
+        commandResultFuture.completeExceptionally(failure);
+        responseFuture.complete(InMemoryEnrollmentResult.failure(failure));
+    }
+
+    private InMemoryEnrollmentResult toLegacyResult(GlobalInMemoryEnrollmentCommandResult result) {
+        if (result.accepted()) {
+            return InMemoryEnrollmentResult.success();
+        }
+        GlobalInMemoryEnrollmentRejected rejected = (GlobalInMemoryEnrollmentRejected) result;
+        return InMemoryEnrollmentResult.failure(GlobalInMemoryRejectionExceptionMapper.toLegacyException(
+                rejected.rejectionReason()
+        ));
     }
 }
